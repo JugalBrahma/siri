@@ -1,9 +1,9 @@
-from langgraph.graph import StateGraph,END
+from langgraph.graph import StateGraph, END
 from state.message_state import State
 
 class GraphBuilder:
 
-    def __init__(self, supervisor, sub_infosupervisor, sub_actionsupervisor, researcher, weather, action, guardrail):
+    def __init__(self, supervisor, sub_infosupervisor, sub_actionsupervisor, researcher, weather, action, guardrail, output_sanitizer):
         self.supervisor = supervisor
         self.sub_infosupervisor = sub_infosupervisor 
         self.sub_actionsupervisor = sub_actionsupervisor
@@ -11,6 +11,7 @@ class GraphBuilder:
         self.weather = weather
         self.action = action
         self.guardrail = guardrail
+        self.output_sanitizer = output_sanitizer
         self.graph = None
         
 
@@ -23,13 +24,14 @@ class GraphBuilder:
         graph.add_node("action", self.action)
         graph.add_node("researcher", self.researcher)
         graph.add_node("weather", self.weather)
+        graph.add_node("output_sanitizer", self.output_sanitizer)
 
         graph.set_entry_point("guardrail")
 
         graph.add_edge("researcher", "sub_infosupervisor")
         graph.add_edge("weather", "sub_infosupervisor")
         graph.add_edge("action", "sub_actionsupervisor")
-        graph.add_edge("supervisor", END)
+        graph.add_edge("output_sanitizer", END)
         self.graph = graph.compile()
         return self.graph
     

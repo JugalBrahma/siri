@@ -7,6 +7,7 @@ from agents.research_agent import research_agent
 from agents.weather_agent import weather_agent
 from agents.actionagent import action_agent
 from agents.guardrail_agent import guardrail_agent
+from agents.output_sanitizer import output_sanitizer_agent
 from langsmith import evaluate, Client
 from langsmith import traceable
 def main():
@@ -18,7 +19,8 @@ def main():
         sub_infosupervisor=sub_infoSuperVisorAgent,
         action=action_agent,
         researcher=research_agent,
-        weather=weather_agent
+        weather=weather_agent,
+        output_sanitizer=output_sanitizer_agent
     )
     #upload_datasets()
     # Build graph

@@ -5,7 +5,7 @@ from state.message_state import State, MainSupervisorDecision, InfoSupervisorDec
 from .prompt import system_prompt, sub_info_supervisor_prompt, sub_action_supervisor_prompt
 from models.models import llm
 
-def superVisorAgent(state:State)->Command[Literal['sub_infosupervisor','sub_actionsupervisor','__end__']]:
+def superVisorAgent(state:State)->Command[Literal['sub_infosupervisor','sub_actionsupervisor','output_sanitizer']]:
     print("--- SUPERVISOR AGENT ---")
     messages = [{"role":"system","content":system_prompt},]+ state["messages"]
     llm_with_structured_output = llm.with_structured_output(MainSupervisorDecision)
@@ -14,7 +14,7 @@ def superVisorAgent(state:State)->Command[Literal['sub_infosupervisor','sub_acti
     print(f"Decision: {goto}")
 
     if goto == "FINISH":
-        goto=END
+        goto = "output_sanitizer"
 
     return Command(goto=goto, update={"next": goto})
 
