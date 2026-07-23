@@ -1,0 +1,28 @@
+# Environment variables & API keys
+.env
+.env.*
+!.env.example
+
+# Key files & credentials
+*.key
+*.pem
+*.pfx
+*.p12
+*.crt
+secrets/
+secrets.json
+secrets.yaml
+secrets.yml
+
+# Python / Environment
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+
+# IDE / Editor Settings
+.vscode/
+.idea/

@@ -1,0 +1,37 @@
+# c:/Flutter Projects/siri/config/guardrails/config.yml
+
+colang_version: "1.0"
+
+# 1. The main LLM is provided via constructor (llm=llm) in guardrail_agent.py
+#    Only embeddings model is configured here.
+models:
+  - type: embeddings
+    engine: FastEmbed
+    model: BAAI/bge-small-en-v1.5
+
+# 2. Configure active input and output rails
+rails:
+  input:
+    flows:
+      - jailbreak protection
+      - self check input
+
+# 3. Configure self-check system prompts
+prompts:
+  - task: self_check_input
+    content: |
+      Your task is to check if the user message below contains harmful, illegal, or destructive requests (e.g. formatting hard drive, deleting files).
+
+      User message: "{{ user_input }}"
+
+      Question: Should the request be blocked? Answer with YES or NO.
+      Answer:
+
+  - task: self_check_output
+    content: |
+      Your task is to check if the bot output below contains harmful, unsafe, or confidential information.
+
+      Bot message: "{{ bot_response }}"
+
+      Question: Should the message be blocked? Answer with YES or NO.
+      Answer:
