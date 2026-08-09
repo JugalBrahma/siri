@@ -14,7 +14,7 @@ This document serves as the step-by-step developer guide for adding custom, prod
 ## 🗺️ Implementation Roadmap & Checklist
 
 ### Phase 1: Create Memory Core Module (`memory/`)
-- [ ] Create `c:\Flutter Projects\siri\memory\` folder.
+- [x] Create `c:\Flutter Projects\siri\memory\` folder.
 - [ ] Create `memory/__init__.py`
 - [ ] Create `memory/data_model.py` (Part 1 - `SemanticFact` dataclass & `FactCategory`)
 - [ ] Create `memory/distiller.py` (Part 2 - `distil_episodes_to_facts` using `gpt-4o-mini` & `hashlib.md5`)
