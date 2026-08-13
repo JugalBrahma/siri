@@ -122,3 +122,25 @@ class PineconeSemanticMemoryStore:
             min_confidence=threshold,
             categories=categories,
         )
+
+    def format_for_injection(
+        self,
+        categories: Optional[List[str]] = None,
+        min_confidence: Optional[float] = None,
+    ) -> str:
+        """Return reliable facts as one safe, turn-scoped prompt fragment.
+
+        This method is deliberately called by ``GraphBuilder`` once before a
+        graph turn starts. Workers receive the resulting string through their
+        supervisor state and never query the store themselves.
+        """
+        facts = self.get_reliable_facts(
+            categories=categories,
+            min_confidence=min_confidence,
+        )
+        formatted_facts = [
+            fact.format_for_injection()
+            for fact in facts
+            if hasattr(fact, "format_for_injection")
+        ]
+        return "\n".join(formatted_facts)

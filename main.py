@@ -41,7 +41,11 @@ def main():
         final_output = ""
         
         # 2. Run the graph fully and grab the final state
-        initial_state = {"messages": [{"role": "user", "content": user_question}]}
+        # GraphBuilder fetches semantic memory once here, before any routing
+        # node runs. All routed agents receive this same turn-scoped snapshot.
+        initial_state = builder.create_turn_state(
+            [{"role": "user", "content": user_question}],
+        )
         
         # Use stream to count the number of nodes executed (hops)
         hop_count = 0

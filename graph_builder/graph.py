@@ -1,9 +1,20 @@
 from langgraph.graph import StateGraph, END
-from state.message_state import State
+from state.message_state import State, create_turn_state
 
 class GraphBuilder:
 
-    def __init__(self, supervisor, sub_infosupervisor, sub_actionsupervisor, researcher, weather, action, guardrail, output_sanitizer):
+    def __init__(
+        self,
+        supervisor,
+        sub_infosupervisor,
+        sub_actionsupervisor,
+        researcher,
+        weather,
+        action,
+        guardrail,
+        output_sanitizer,
+        memory_store=None,
+    ):
         self.supervisor = supervisor
         self.sub_infosupervisor = sub_infosupervisor 
         self.sub_actionsupervisor = sub_actionsupervisor
@@ -12,6 +23,9 @@ class GraphBuilder:
         self.action = action
         self.guardrail = guardrail
         self.output_sanitizer = output_sanitizer
+        # The store is optional while persistence infrastructure is being
+        # wired. When present, it is read exactly once by create_turn_state.
+        self.memory_store = memory_store
         self.graph = None
         
 
@@ -35,6 +49,24 @@ class GraphBuilder:
         self.graph = graph.compile()
         return self.graph
     
+    def _fetch_semantic_memory(self) -> str:
+        """Fetch a single durable-memory snapshot for the next graph turn."""
+        if self.memory_store is None:
+            return ""
+
+        try:
+            return self.memory_store.format_for_injection()
+        except Exception as exc:
+            # Memory retrieval should not prevent the assistant from handling
+            # the current user request. The next turn can retry the fetch.
+            print(f"Warning: semantic-memory retrieval failed: {exc}")
+            return ""
+
+    def create_turn_state(self, messages: list) -> State:
+        """Build a turn state after fetching semantic memory exactly once."""
+        semantic_memory = self._fetch_semantic_memory()
+        return create_turn_state(messages, semantic_memory)
+
     def run(self, messages: list) -> dict:
         """
         Run the agent workflow
@@ -48,5 +80,5 @@ class GraphBuilder:
         if self.graph is None:
             self.build()
         
-        return self.graph.invoke({"messages": messages})
+        return self.graph.invoke(self.create_turn_state(messages))
 
