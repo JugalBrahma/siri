@@ -1,5 +1,7 @@
 from langgraph.graph import StateGraph, END
 from state.message_state import State, create_turn_state
+from memory.observability import MemoryObserver
+from time import perf_counter
 
 class GraphBuilder:
 
@@ -14,6 +16,7 @@ class GraphBuilder:
         guardrail,
         output_sanitizer,
         memory_store=None,
+        memory_observer=None,
     ):
         self.supervisor = supervisor
         self.sub_infosupervisor = sub_infosupervisor 
@@ -26,6 +29,7 @@ class GraphBuilder:
         # The store is optional while persistence infrastructure is being
         # wired. When present, it is read exactly once by create_turn_state.
         self.memory_store = memory_store
+        self.memory_observer = memory_observer or MemoryObserver()
         self.graph = None
         
 
@@ -54,12 +58,24 @@ class GraphBuilder:
         if self.memory_store is None:
             return ""
 
+        started_at = perf_counter()
         try:
-            return self.memory_store.format_for_injection()
+            profile = self.memory_store.format_for_injection()
+            metrics_getter = getattr(self.memory_store, "get_last_retrieval_metrics", None)
+            metrics = metrics_getter() if callable(metrics_getter) else {}
+            self.memory_observer.fetch_succeeded(
+                elapsed_ms=(perf_counter() - started_at) * 1000,
+                profile=profile,
+                metrics=metrics,
+            )
+            return profile
         except Exception as exc:
             # Memory retrieval should not prevent the assistant from handling
             # the current user request. The next turn can retry the fetch.
-            print(f"Warning: semantic-memory retrieval failed: {exc}")
+            self.memory_observer.fetch_failed(
+                elapsed_ms=(perf_counter() - started_at) * 1000,
+                error=exc,
+            )
             return ""
 
     def create_turn_state(self, messages: list) -> State:

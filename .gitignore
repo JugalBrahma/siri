@@ -14,6 +14,9 @@ secrets.json
 secrets.yaml
 secrets.yml
 
+# Local semantic-memory facts and queued episode summaries
+memory_data/
+
 # Python / Environment
 __pycache__/
 *.py[cod]

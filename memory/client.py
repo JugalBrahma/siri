@@ -25,6 +25,7 @@ PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "aisaftey")
 PINECONE_CLOUD = os.getenv("PINECONE_CLOUD", "aws")
 PINECONE_REGION = os.getenv("PINECONE_REGION", "us-east-1")
+PINECONE_DIMENSION = int(os.getenv("PINECONE_DIMENSION", "1024"))
 
 pinecone_index = None
 if PINECONE_API_KEY:
@@ -35,23 +36,18 @@ if PINECONE_API_KEY:
         # Check if index exists; create if missing
         if not pc.has_index(PINECONE_INDEX_NAME):
             print(f"Index '{PINECONE_INDEX_NAME}' not found. Creating serverless index...")
-            try:
-                pc.create_index_for_model(
-                    name=PINECONE_INDEX_NAME,
+            # Siri creates embeddings itself. A plain vector index with this
+            # exact dimension avoids mixing Pinecone integrated embeddings with
+            # the 1024-dimension vectors returned by get_embedding().
+            pc.create_index(
+                name=PINECONE_INDEX_NAME,
+                dimension=PINECONE_DIMENSION,
+                metric="cosine",
+                spec=ServerlessSpec(
                     cloud=PINECONE_CLOUD,
                     region=PINECONE_REGION,
-                    embed={"model": "text-embedding-3-large", "field_map": {"text": "chunk_text"}}
-                )
-            except (AttributeError, Exception):
-                pc.create_index(
-                    name=PINECONE_INDEX_NAME,
-                    dimension=1024,
-                    metric="cosine",
-                    spec=ServerlessSpec(
-                        cloud=PINECONE_CLOUD,
-                        region=PINECONE_REGION
-                    )
-                )
+                ),
+            )
 
         pinecone_index = pc.Index(PINECONE_INDEX_NAME)
     except Exception as e:
@@ -63,7 +59,7 @@ PINECONE_NAMESPACE = "semantic"
 def ensure_namespace_exists(
     index,
     namespace: str = PINECONE_NAMESPACE,
-    dimension: int = 1024,
+    dimension: int = PINECONE_DIMENSION,
 ) -> bool:
     """
     Ensure a Pinecone namespace exists inside the given index.
@@ -106,7 +102,7 @@ if pinecone_index is not None:
     ensure_namespace_exists(pinecone_index)
 
 
-def get_embedding(text: str, dimensions: int = 1024) -> list:
+def get_embedding(text: str, dimensions: int = PINECONE_DIMENSION) -> list:
     """Generate embedding vector using OpenAI text-embedding-3-large matching Pinecone index dim."""
     if not client:
         raise ValueError("OpenAI client is not initialized.")
@@ -116,7 +112,6 @@ def get_embedding(text: str, dimensions: int = 1024) -> list:
         dimensions=dimensions
     )
     return response.data[0].embedding
-
 
 
 

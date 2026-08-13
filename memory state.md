@@ -20,10 +20,13 @@ Give every user turn one consistent, read-only snapshot of reliable semantic mem
 - [x] Updated `GraphBuilder` to call `memory_store.format_for_injection()` once before graph execution. A missing or temporarily failing store leaves the profile empty and does not stop the turn.
 - [x] Added `PineconeSemanticMemoryStore.format_for_injection()` to turn reliable facts into the profile passed to the graph.
 - [x] Kept worker invocation inputs to messages only; worker-local state is not propagated through LangGraph.
+- [x] Instantiate the real Pinecone store and JSON metadata repository in `main.py`, then inject it into `GraphBuilder` when the required credentials exist.
+- [x] Add post-turn episode summarization, a persisted background queue, and batch distillation that merges durable facts through the store.
+- [x] Add unit tests with a fake memory store proving one fetch per turn, scope isolation, overwrite semantics, and no worker scratchpad leakage.
+- [x] Add privacy-safe metrics for memory retrieval and distillation: timing, fact counts, profile size, confidence range, action counts, and error type only.
 
 ## Next steps
 
-- [ ] Instantiate and inject the configured Pinecone store plus its metadata repository into `GraphBuilder` in `main.py`.
-- [ ] Add the post-turn episode summary and background distillation queue, then write new durable facts through the store.
-- [ ] Add unit tests with a fake memory store to prove one fetch per turn, scope isolation, overwrite semantics, and no worker scratchpad leakage.
-- [ ] Add observability for memory retrieval failures, profile size, and fact confidence without logging sensitive memory contents.
+- [ ] Add a database-backed metadata repository before multi-process or multi-user deployment; the current JSON repository is intentionally local and single-process.
+- [ ] Add integration tests against a non-production Pinecone index and a mocked OpenAI client.
+- [ ] Add a user-facing memory settings flow for review, correction, deletion, and opt-out.

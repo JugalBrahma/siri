@@ -1,5 +1,7 @@
 # main.py
 import config.config
+import logging
+import os
 #from evaluate.datasets_evaluate import upload_datasets
 from graph_builder.graph import GraphBuilder
 from agents.supervisor_agent import superVisorAgent,sub_actionSuperVisorAgent,sub_infoSuperVisorAgent 
@@ -10,7 +12,27 @@ from agents.guardrail_agent import guardrail_agent
 from agents.output_sanitizer import output_sanitizer_agent
 from langsmith import evaluate, Client
 from langsmith import traceable
+from memory.observability import MemoryObserver
+from memory.runtime import create_configured_memory_store
+
+
 def main():
+    logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+    memory_user_id = os.getenv("SIRI_USER_ID", "siri_user")
+    memory_observer = MemoryObserver()
+    memory_store = create_configured_memory_store(user_id=memory_user_id)
+    learning_service = None
+    if memory_store is not None:
+        # Import only when the real store is configured so an ordinary Siri run
+        # without memory credentials never initializes the distillation client.
+        from memory.learning import MemoryLearningService
+
+        learning_service = MemoryLearningService(
+            memory_store=memory_store,
+            user_id=memory_user_id,
+            observer=memory_observer,
+        )
+
     # Initialize builder with agents
     builder = GraphBuilder(
         guardrail=guardrail_agent,
@@ -20,7 +42,9 @@ def main():
         action=action_agent,
         researcher=research_agent,
         weather=weather_agent,
-        output_sanitizer=output_sanitizer_agent
+        output_sanitizer=output_sanitizer_agent,
+        memory_store=memory_store,
+        memory_observer=memory_observer,
     )
     #upload_datasets()
     # Build graph
@@ -61,6 +85,11 @@ def main():
         final_output = ""
         if "messages" in final_state and len(final_state["messages"]) > 0:
             final_output = final_state["messages"][-1].content
+
+        # This only schedules work. Summarization and fact distillation happen
+        # after the reply path, on the service's single background worker.
+        if learning_service is not None:
+            learning_service.submit_completed_turn(final_state.get("messages", []))
 
         return {
             "query_input": user_question,

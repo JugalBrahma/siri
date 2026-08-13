@@ -22,6 +22,11 @@ class PineconeSemanticMemoryStore:
         self.embed_fn = embed_fn
         self.compare_fn = compare_fn
         self.confidence_threshold = confidence_threshold
+        self._last_retrieval_metrics: Dict[str, Optional[float]] = {
+            "fact_count": 0,
+            "confidence_min": None,
+            "confidence_max": None,
+        }
 
     # ---------- write path ----------
 
@@ -38,6 +43,11 @@ class PineconeSemanticMemoryStore:
             return "added"
 
         existing = self.metadata_db.get(match["fact_id"])
+        if existing is None:
+            # The vector can outlive a local metadata file (for example after a
+            # restore). Treat the new fact as authoritative and repair it.
+            self._upsert(new_fact, embedding)
+            return "added"
 
         if match["score"] >= SIMILARITY_DUPLICATE:
             # Near-certain restatement -- no need to ask the LLM.
@@ -138,9 +148,19 @@ class PineconeSemanticMemoryStore:
             categories=categories,
             min_confidence=min_confidence,
         )
+        confidences = [fact.confidence for fact in facts if hasattr(fact, "confidence")]
+        self._last_retrieval_metrics = {
+            "fact_count": len(facts),
+            "confidence_min": min(confidences) if confidences else None,
+            "confidence_max": max(confidences) if confidences else None,
+        }
         formatted_facts = [
             fact.format_for_injection()
             for fact in facts
             if hasattr(fact, "format_for_injection")
         ]
         return "\n".join(formatted_facts)
+
+    def get_last_retrieval_metrics(self) -> Dict[str, Optional[float]]:
+        """Return safe aggregate metrics for logging; never return fact text."""
+        return dict(self._last_retrieval_metrics)

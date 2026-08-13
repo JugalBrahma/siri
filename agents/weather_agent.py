@@ -10,7 +10,7 @@ from state.message_state import (
 from models.models import llm
 from tools.weather import tools
 from langchain.agents import create_agent
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage
 
 
 def weather_agent(state:State)-> Command[Literal["sub_infosupervisor"]]:
@@ -36,7 +36,7 @@ def weather_agent(state:State)-> Command[Literal["sub_infosupervisor"]]:
     return Command(
         update={
             "messages":[
-                HumanMessage(content=final_output, name="weather")
+                AIMessage(content=final_output, name="weather")
             ],
             "info_supervisor": info_state,
         },

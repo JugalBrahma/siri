@@ -11,7 +11,7 @@ from state.message_state import (
 from models.models import llm
 from tools.searchtools import search_tool
 from langchain.agents import create_agent
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage
 
 
 def research_agent(state:State)-> Command[Literal["sub_infosupervisor"]]:
@@ -35,7 +35,7 @@ def research_agent(state:State)-> Command[Literal["sub_infosupervisor"]]:
     return Command(
         update={
             "messages":[
-                HumanMessage(content=final_output, name="researcher")
+                AIMessage(content=final_output, name="researcher")
             ],
             "info_supervisor": info_state,
         },

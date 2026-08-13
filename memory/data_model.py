@@ -1,6 +1,6 @@
 from typing import Dict, List, Optional
 from enum import Enum
-from datetime import datetime, timezone 
+from datetime import datetime, timezone
 class FactCategory(str,Enum):
     """
     Categories for semantic facts.
@@ -12,7 +12,7 @@ class FactCategory(str,Enum):
     PREFERENCE ="preference"
     COMMUNICATION = "communication"
     GENERAL = "general"
-    
+
 class SemanticFact:
     """
     A Single distilled general truth about a user.
@@ -62,13 +62,15 @@ class SemanticFact:
     def is_reliable(self, threshold: float = 0.7) -> bool:
         """Return True if this fact meets the confidence threshold for injection."""
         return self.confidence >= threshold
-    
+
     def strengthen(self, episode_id: str):
         old_confidence = self.confidence
         self.confidence = self.confidence + 0.1
         if self.confidence > 1.0:
             self.confidence = 1.0
         self.observation_count += 1
+        if episode_id and episode_id not in self.source_episode_ids:
+            self.source_episode_ids.append(episode_id)
         self.last_confirmed = datetime.now(timezone.utc).isoformat()
         self.evolution_log.append({
             "action": "confirmed",
@@ -77,8 +79,7 @@ class SemanticFact:
             "episode_id": episode_id,
             "timestamp": self.last_confirmed,
         })
-        
-        
+
     def weaken(self,reason: str = ""):
         old_confidence = self.confidence
         self.confidence = self.confidence - 0.2
@@ -101,7 +102,3 @@ class SemanticFact:
             "[low confidence]"
         )
         return f"- {self.statement} {conf_label}"
-
-
-print("SemanticFact dataclass defined.")
-    

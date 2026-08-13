@@ -1,7 +1,7 @@
 # agents/guardrail_agent.py
 from langgraph.graph import END
 from langgraph.types import Command
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage
 from typing import Literal
 from state.message_state import State
 # pyrefly: ignore [missing-import]
@@ -32,7 +32,7 @@ def guardrail_agent(state: State) -> Command[Literal["supervisor", END]]:
         return Command(
             update={
                 "messages": [
-                    HumanMessage(
+                    AIMessage(
                         content=bot_output or REFUSAL_FALLBACK,
                         name="guardrail",
                     )

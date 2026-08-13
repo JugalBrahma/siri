@@ -1,4 +1,4 @@
-DISTILLATION_PROMPT = """You are a semantic memory distiller for FinCoach.
+DISTILLATION_PROMPT = """You are a semantic memory distiller for Siri.
 Your job is to read a set of past session summaries and extract GENERAL TRUTHS about the user.
 
 These are not facts about specific sessions (that is episodic memory).

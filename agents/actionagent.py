@@ -11,7 +11,7 @@ from state.message_state import (
 from models.models import llm
 from tools.terminal import run_terminal_command, modify_file,read_file,write_to_open_word,write_to_word
 from langchain.agents import create_agent
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage
 
 tools = [run_terminal_command,modify_file,read_file,write_to_open_word,write_to_word]
 
@@ -37,7 +37,7 @@ def action_agent(state:State)-> Command[Literal["sub_actionsupervisor"]]:
     return Command(
         update={
             "messages":[
-                HumanMessage(content=final_output, name="action")
+                AIMessage(content=final_output, name="action")
             ],
             "action_supervisor": action_state,
         },

@@ -5,6 +5,7 @@ faiss-cpu
 tiktoken
 langchain-community
 langchain-openai
+openai
 chromadb
 sentence-transformers
 pypdf
