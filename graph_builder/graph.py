@@ -56,6 +56,7 @@ class GraphBuilder:
     def _fetch_semantic_memory(self) -> str:
         """Fetch a single durable-memory snapshot for the next graph turn."""
         if self.memory_store is None:
+            print("ℹ️ [Memory Fetch] Semantic memory store is disabled / unconfigured.")
             return ""
 
         started_at = perf_counter()
@@ -63,19 +64,23 @@ class GraphBuilder:
             profile = self.memory_store.format_for_injection()
             metrics_getter = getattr(self.memory_store, "get_last_retrieval_metrics", None)
             metrics = metrics_getter() if callable(metrics_getter) else {}
+            elapsed_ms = (perf_counter() - started_at) * 1000
             self.memory_observer.fetch_succeeded(
-                elapsed_ms=(perf_counter() - started_at) * 1000,
+                elapsed_ms=elapsed_ms,
                 profile=profile,
                 metrics=metrics,
             )
+            print(f"🧠 [Memory Fetch] Retrieved {metrics.get('fact_count', 0)} facts in {round(elapsed_ms, 1)}ms: {profile or '(no facts stored yet)'}")
             return profile
         except Exception as exc:
             # Memory retrieval should not prevent the assistant from handling
             # the current user request. The next turn can retry the fetch.
+            elapsed_ms = (perf_counter() - started_at) * 1000
             self.memory_observer.fetch_failed(
-                elapsed_ms=(perf_counter() - started_at) * 1000,
+                elapsed_ms=elapsed_ms,
                 error=exc,
             )
+            print(f"⚠️ [Memory Fetch] Failed after {round(elapsed_ms, 1)}ms: {exc}")
             return ""
 
     def create_turn_state(self, messages: list) -> State:

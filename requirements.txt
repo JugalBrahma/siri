@@ -14,3 +14,6 @@ ipykernel
 pandas
 langgraph
 pinecone
+fastapi[standard]
+uvicorn[standard]
+nest_asyncio

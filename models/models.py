@@ -8,10 +8,10 @@ load_dotenv()
 from langchain_groq import ChatGroq
 # pyrefly: ignore [missing-import]
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
-model = "openai/gpt-oss-120b"
-
+# model = "openai/gpt-oss-120b"
+model = "qwen/qwen3.6-27b"
 llm = ChatGroq(
-    model_name="llama-3.3-70b-versatile",
+    model_name=model,
     temperature=1
 )
 

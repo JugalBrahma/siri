@@ -6,20 +6,31 @@ load_dotenv()
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
 DISTILLATION_MODEL_ENV = os.getenv("DISTILLATION_MODEL")
 
-if OPENAI_API_KEY:
+DISTILLATION_MODEL = DISTILLATION_MODEL_ENV or ("gpt-4o-mini" if OPENAI_API_KEY else "llama3-8b-8192")
+
+# OpenAI client specifically for text-embedding-3-large vectors
+embedding_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else OpenAI()
+
+# LLM Client for summarization and semantic fact distillation
+if OPENAI_API_KEY and not DISTILLATION_MODEL_ENV:
     client = OpenAI(api_key=OPENAI_API_KEY)
-    DISTILLATION_MODEL = DISTILLATION_MODEL_ENV or "gpt-4o-mini"
+elif NVIDIA_API_KEY and any(k in DISTILLATION_MODEL.lower() for k in ["qwen", "nvidia", "deepseek", "nemotron"]):
+    client = OpenAI(
+        base_url="https://integrate.api.nvidia.com/v1",
+        api_key=NVIDIA_API_KEY,
+    )
 elif GROQ_API_KEY:
     client = OpenAI(
         base_url="https://api.groq.com/openai/v1",
         api_key=GROQ_API_KEY,
     )
-    DISTILLATION_MODEL = DISTILLATION_MODEL_ENV or "llama-3.3-70b-versatile"
+elif OPENAI_API_KEY:
+    client = OpenAI(api_key=OPENAI_API_KEY)
 else:
     client = OpenAI()
-    DISTILLATION_MODEL = DISTILLATION_MODEL_ENV or "gpt-4o-mini"
 
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "aisaftey")
@@ -104,9 +115,9 @@ if pinecone_index is not None:
 
 def get_embedding(text: str, dimensions: int = PINECONE_DIMENSION) -> list:
     """Generate embedding vector using OpenAI text-embedding-3-large matching Pinecone index dim."""
-    if not client:
-        raise ValueError("OpenAI client is not initialized.")
-    response = client.embeddings.create(
+    if not embedding_client:
+        raise ValueError("OpenAI embedding client is not initialized.")
+    response = embedding_client.embeddings.create(
         model="text-embedding-3-large",
         input=text,
         dimensions=dimensions

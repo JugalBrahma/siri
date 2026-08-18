@@ -42,6 +42,11 @@ class JsonEpisodeQueue:
             ]
             self._write(remaining)
 
+    def clear(self) -> None:
+        """Clear all pending episodes from the queue."""
+        with self._lock:
+            self._write([])
+
     def _write(self, episodes: List[Dict]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path = self.path.with_suffix(f"{self.path.suffix}.tmp")

@@ -1,19 +1,18 @@
-
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 SIMILARITY_DUPLICATE = 0.92   # same fact restated -> strengthen, don't add
 SIMILARITY_RELATED = 0.75     # related topic -> compare before deciding
 
- 
+
 class PineconeSemanticMemoryStore:
     def __init__(
         self,
         user_id: str,
         index,                 # pinecone Index, vectors live in namespace="semantic"
         metadata_db,           # .get(fact_id) / .save(fact_id, fact) / .query_by_user(...)
-        embed_fn,               # text -> list[float]
-        compare_fn,              # (old_statement, new_statement) -> "confirms" | "contradicts" | "unrelated"
+        embed_fn,              # text -> list[float]
+        compare_fn,            # (old_statement, new_statement) -> "confirms" | "contradicts" | "unrelated"
         confidence_threshold: float = 0.65,
     ):
         self.user_id = user_id
@@ -164,3 +163,25 @@ class PineconeSemanticMemoryStore:
     def get_last_retrieval_metrics(self) -> Dict[str, Optional[float]]:
         """Return safe aggregate metrics for logging; never return fact text."""
         return dict(self._last_retrieval_metrics)
+
+    def clear_memory(self, user_id: Optional[str] = None) -> Dict[str, Any]:
+        """Clear all facts for user from vector index and metadata database."""
+        target_user = user_id or self.user_id
+        cleared_facts = self.metadata_db.clear(user_id=target_user)
+        try:
+            self.index.delete(
+                namespace="semantic",
+                filter={"user_id": target_user},
+            )
+        except Exception:
+            try:
+                self.index.delete(delete_all=True, namespace="semantic")
+            except Exception:
+                pass
+
+        self._last_retrieval_metrics = {
+            "fact_count": 0,
+            "confidence_min": None,
+            "confidence_max": None,
+        }
+        return {"status": "success", "cleared_facts": cleared_facts, "user_id": target_user}

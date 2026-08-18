@@ -50,3 +50,12 @@ class MemoryObserver:
 
     def _emit(self, **event: object) -> None:
         self.logger.info(json.dumps(event, sort_keys=True))
+        event_name = event.get("event")
+        status = event.get("status")
+        if event_name == "semantic_memory_fetch":
+            print(f"🧠 [SEMANTIC MEMORY FETCH] Status: {status} | Facts loaded: {event.get('fact_count', 0)} | Latency: {event.get('latency_ms')}ms")
+        elif event_name == "semantic_memory_distillation":
+            if status == "success":
+                print(f"✨ [SEMANTIC MEMORY DISTILLATION] Success! Episodes: {event.get('episode_count')} | Facts learned: {event.get('fact_count')} | Actions: {event.get('actions')}")
+            else:
+                print(f"⚠️ [SEMANTIC MEMORY DISTILLATION] Failed: {event.get('error_type')}")

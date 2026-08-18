@@ -4,6 +4,11 @@ from langsmith import traceable
 
 load_dotenv()
 
+try:
+    import nest_asyncio
+    nest_asyncio.apply()
+except ImportError:
+    pass
 
 os.environ["LANGSMITH_TRACING"] = "true"
 os.environ["LANGSMITH_PROJECT"] = "siri"

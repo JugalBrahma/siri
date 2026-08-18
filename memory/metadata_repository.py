@@ -59,6 +59,23 @@ class JsonSemanticFactRepository:
         ]
         return sorted(results, key=lambda fact: fact.confidence, reverse=True)
 
+    def clear(self, user_id: Optional[str] = None) -> int:
+        """Clear facts from repository. If user_id is provided, only clear for that user."""
+        with self._lock:
+            facts = self._read_facts()
+            if user_id is None:
+                count = len(facts)
+                self._write_facts({})
+                return count
+            
+            remaining = {
+                fid: f for fid, f in facts.items()
+                if f.get("user_id") != user_id
+            }
+            cleared_count = len(facts) - len(remaining)
+            self._write_facts(remaining)
+            return cleared_count
+
     def _read_facts(self) -> Dict[str, Dict]:
         if not self.path.exists():
             return {}
