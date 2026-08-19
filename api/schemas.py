@@ -78,6 +78,10 @@ class ChatResponse(BaseModel):
         default="success",
         description="Execution status.",
     )
+    token_usage: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Exact token usage and node breakdown from LangSmith/LangChain.",
+    )
 
 
 class HealthResponse(BaseModel):
@@ -91,9 +95,18 @@ class HealthResponse(BaseModel):
 class MemoryFactItem(BaseModel):
     """Representation of an individual semantic memory fact."""
     fact_id: str
-    content: str
+    content: Optional[str] = None
+    statement: Optional[str] = None
     confidence: Optional[float] = None
     category: Optional[str] = None
+
+
+class AddFactRequest(BaseModel):
+    """Payload for manually injecting a semantic fact."""
+    statement: Optional[str] = None
+    content: Optional[str] = None
+    category: Optional[str] = "preference"
+    confidence: Optional[float] = 0.95
 
 
 class MemoryResponse(BaseModel):

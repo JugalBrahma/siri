@@ -59,6 +59,16 @@ class JsonSemanticFactRepository:
         ]
         return sorted(results, key=lambda fact: fact.confidence, reverse=True)
 
+    def delete(self, fact_id: str) -> bool:
+        """Delete a single fact by its fact_id."""
+        with self._lock:
+            facts = self._read_facts()
+            if fact_id in facts:
+                del facts[fact_id]
+                self._write_facts(facts)
+                return True
+            return False
+
     def clear(self, user_id: Optional[str] = None) -> int:
         """Clear facts from repository. If user_id is provided, only clear for that user."""
         with self._lock:

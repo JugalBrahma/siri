@@ -5,12 +5,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
 from api.schemas import (
+    AddFactRequest,
+    ChatMessage,
     ChatRequest,
     ChatResponse,
     HealthResponse,
     MemoryResponse,
 )
 from api.service import SiriAgentService
+from services.token_tracker import LangSmithTokenTracker
 
 router = APIRouter(tags=["Siri Agent API"])
 
@@ -65,6 +68,7 @@ async def chat_endpoint(
             hop_count=result["hop_count"],
             user_id=result["user_id"],
             status=result["status"],
+            token_usage=result.get("token_usage"),
         )
     except Exception as exc:
         raise HTTPException(
@@ -82,7 +86,7 @@ async def chat_stream_endpoint(
     request_data: ChatRequest,
     service: SiriAgentService = Depends(get_agent_service),
 ):
-    """Stream execution progress using SSE format."""
+    """Stream execution progress using SSE format with exact LangSmith token metrics."""
     messages = request_data.to_message_list()
     active_user_id = request_data.user_id or service.default_user_id
 
@@ -92,15 +96,19 @@ async def chat_stream_endpoint(
                 service.initialize()
 
             initial_state = service.builder.create_turn_state(messages)
+            tracker = LangSmithTokenTracker()
+            config = {"callbacks": [tracker]}
+
             hop_count = 0
             final_state = initial_state
 
             yield f"data: {json.dumps({'event': 'start', 'user_id': active_user_id})}\n\n"
 
-            for state in service.builder.graph.stream(initial_state, stream_mode="values"):
+            for state in service.builder.graph.stream(initial_state, stream_mode="values", config=config):
                 final_state = state
                 hop_count += 1
                 current_node = state.get("next", "")
+                tracker.set_current_node(current_node)
                 yield f"data: {json.dumps({'event': 'node_update', 'hop': hop_count, 'next': current_node})}\n\n"
 
             final_output = ""
@@ -110,7 +118,8 @@ async def chat_stream_endpoint(
             if service.learning_service is not None:
                 service.learning_service.submit_completed_turn(final_state.get("messages", []))
 
-            yield f"data: {json.dumps({'event': 'complete', 'response': final_output, 'hops': max(0, hop_count - 1)})}\n\n"
+            usage_metrics = tracker.get_usage()
+            yield f"data: {json.dumps({'event': 'complete', 'response': final_output, 'hops': max(0, hop_count - 1), 'token_usage': usage_metrics})}\n\n"
         except Exception as exc:
             yield f"data: {json.dumps({'event': 'error', 'detail': str(exc)})}\n\n"
 
@@ -134,6 +143,48 @@ async def get_user_memory(
         facts=info["facts"],
         formatted_profile=info["formatted_profile"],
     )
+
+
+@router.post(
+    "/memory/{user_id}",
+    summary="Add fact to user semantic memory",
+    description="Store or merge an individual semantic fact for a given user.",
+)
+@router.post(
+    "/memory/{user_id}/facts",
+    summary="Add fact to user semantic memory",
+    description="Store or merge an individual semantic fact for a given user.",
+)
+async def add_user_memory_fact(
+    user_id: str,
+    payload: AddFactRequest,
+    service: SiriAgentService = Depends(get_agent_service),
+):
+    text = payload.statement or payload.content or ""
+    if not text.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Fact statement or content is required.")
+    return service.add_user_fact(
+        user_id=user_id,
+        statement=text.strip(),
+        category=payload.category or "preference",
+        confidence=payload.confidence if payload.confidence is not None else 0.95,
+    )
+
+
+@router.delete(
+    "/memory/{user_id}/facts/{fact_id}",
+    summary="Delete single memory fact",
+    description="Delete a specific semantic fact by its fact_id.",
+)
+async def delete_single_fact(
+    user_id: str,
+    fact_id: str,
+    service: SiriAgentService = Depends(get_agent_service),
+):
+    res = service.delete_user_fact(user_id=user_id, fact_id=fact_id)
+    if not res.get("deleted"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Fact with ID '{fact_id}' not found.")
+    return res
 
 
 @router.delete(

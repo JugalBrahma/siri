@@ -119,15 +119,17 @@ class PineconeSemanticMemoryStore:
         self,
         categories: Optional[List[str]] = None,
         min_confidence: Optional[float] = None,
+        user_id: Optional[str] = None,
     ) -> List:
         """
         'Give me everything above threshold' is a filter, not a similarity
         question -- this goes through metadata_db directly, same principle
         as session lookup bypassing the vector index earlier.
         """
+        target_user = user_id or self.user_id
         threshold = min_confidence if min_confidence is not None else self.confidence_threshold
         return self.metadata_db.query_by_user(
-            user_id=self.user_id,
+            user_id=target_user,
             min_confidence=threshold,
             categories=categories,
         )
@@ -136,6 +138,7 @@ class PineconeSemanticMemoryStore:
         self,
         categories: Optional[List[str]] = None,
         min_confidence: Optional[float] = None,
+        user_id: Optional[str] = None,
     ) -> str:
         """Return reliable facts as one safe, turn-scoped prompt fragment.
 
@@ -146,6 +149,7 @@ class PineconeSemanticMemoryStore:
         facts = self.get_reliable_facts(
             categories=categories,
             min_confidence=min_confidence,
+            user_id=user_id,
         )
         confidences = [fact.confidence for fact in facts if hasattr(fact, "confidence")]
         self._last_retrieval_metrics = {
@@ -163,6 +167,20 @@ class PineconeSemanticMemoryStore:
     def get_last_retrieval_metrics(self) -> Dict[str, Optional[float]]:
         """Return safe aggregate metrics for logging; never return fact text."""
         return dict(self._last_retrieval_metrics)
+
+    def delete_fact(self, fact_id: str) -> bool:
+        """Delete a single fact by its ID from metadata store and Pinecone index."""
+        deleted = False
+        if hasattr(self.metadata_db, "delete"):
+            deleted = self.metadata_db.delete(fact_id)
+        try:
+            self.index.delete(
+                ids=[fact_id],
+                namespace="semantic",
+            )
+        except Exception:
+            pass
+        return deleted
 
     def clear_memory(self, user_id: Optional[str] = None) -> Dict[str, Any]:
         """Clear all facts for user from vector index and metadata database."""
