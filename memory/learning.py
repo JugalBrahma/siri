@@ -42,15 +42,15 @@ class MemoryLearningService:
     def submit_completed_turn(self, messages: Iterable[Any]) -> Future:
         """Schedule learning after a reply; this method returns immediately."""
         snapshot = list(messages)
-        print(f"🧠 [Memory Learning] Turn submitted ({len(snapshot)} messages) to background distillation worker.")
+        print(f"[Memory Learning] Turn submitted ({len(snapshot)} messages) to background distillation worker.")
         return self._executor.submit(self._learn_from_turn, snapshot)
 
     def _learn_from_turn(self, messages: List[Any]) -> None:
         try:
-            print("🧠 [Memory Learning] Generating episode summary for turn...")
+            print("[Memory Learning] Generating episode summary for turn...")
             summary = summarize_episode(messages)
             if not summary:
-                print("🧠 [Memory Learning] No summarizable content in turn.")
+                print("[Memory Learning] No summarizable content in turn.")
                 return
 
             episode = {
@@ -60,28 +60,28 @@ class MemoryLearningService:
             }
             self.queue.append(episode)
             queued_count = len(self.queue.peek_all())
-            print(f"🧠 [Memory Learning] Episode queued: \"{summary}\" (Queue size: {queued_count}/{self.batch_size})")
+            print(f"[Memory Learning] Episode queued: \"{summary}\" (Queue size: {queued_count}/{self.batch_size})")
             self._distill_if_ready()
         except Exception as error:
-            print(f"⚠️ [Memory Learning] Learning failed with error: {error}")
+            print(f"[Memory Learning] Learning failed with error: {error}")
             self.observer.learning_failed(error)
 
     def _distill_if_ready(self) -> None:
         episodes = self.queue.peek_all()
         if len(episodes) < self.batch_size:
-            print(f"ℹ️ [Memory Learning] Waiting for more episodes before distillation ({len(episodes)}/{self.batch_size} required).")
+            print(f"[Memory Learning] Waiting for more episodes before distillation ({len(episodes)}/{self.batch_size} required).")
             return
 
         try:
-            print(f"✨ [Memory Learning] Batch size reached ({len(episodes)} episodes)! Distilling into semantic facts...")
+            print(f"[Memory Learning] Batch size reached ({len(episodes)} episodes)! Distilling into semantic facts...")
             facts = distil_episodes_to_facts(episodes, user_id=self.user_id)
-            print(f"✨ [Memory Learning] Extracted {len(facts)} candidate facts: {[f.statement for f in facts]}")
+            print(f"[Memory Learning] Extracted {len(facts)} candidate facts: {[f.statement for f in facts]}")
             actions = Counter(self.memory_store.merge_fact(fact) for fact in facts)
             self.queue.remove([episode["episode_id"] for episode in episodes])
-            print(f"✅ [Memory Learning] Successfully merged {len(facts)} facts into store! Actions: {dict(actions)}")
+            print(f"[Memory Learning] Successfully merged {len(facts)} facts into store! Actions: {dict(actions)}")
             self.observer.learning_completed(len(episodes), len(facts), actions)
         except Exception as error:
-            print(f"⚠️ [Memory Learning] Distillation error: {error}")
+            print(f"[Memory Learning] Distillation error: {error}")
             # Keep the episodes queued. A later completed turn can retry them.
             self.observer.learning_failed(error)
 

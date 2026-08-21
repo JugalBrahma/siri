@@ -9,20 +9,22 @@ from state.message_state import (
     semantic_memory_prompt,
 )
 from models.models import llm
-from tools.terminal import run_terminal_command, modify_file,read_file,write_to_open_word,write_to_word
+from tools.terminal import run_terminal_command, modify_file, read_file, write_to_open_word, write_to_word
+from tools.human_tool import ask_human
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage
 
-tools = [run_terminal_command,modify_file,read_file,write_to_open_word,write_to_word]
+tools = [run_terminal_command, modify_file, read_file, write_to_open_word, write_to_word, ask_human]
 
 def action_agent(state:State)-> Command[Literal["sub_actionsupervisor"]]:
     print("--- ACTION AGENT ---")
     worker_state = build_worker_state(state, "action_supervisor")
     system_prompt = (
-        "You are an automation agent. You have tools to execute terminal commands, modify files, and interact with MS Word. "
+        "You are an automation agent. You have tools to execute terminal commands, modify files, interact with MS Word, and ask the human user for clarification.\n"
         "CRITICAL RULE: If the user asks you to 'open MS word' and write something, you MUST FIRST use 'run_terminal_command' with 'start winword' to visually open the application. "
         "THEN, you MUST use 'write_to_open_word' to type the text directly into the live Word window. "
-        "DO NOT use 'write_to_word' (which creates a background .docx file) unless explicitly asked to generate a file."
+        "DO NOT use 'write_to_word' (which creates a background .docx file) unless explicitly asked to generate a file.\n"
+        "HUMAN-IN-THE-LOOP RULE: If critical information (e.g. file path, specific command parameters, or confirmation for destructive actions) is missing or ambiguous, use the 'ask_human' tool to ask the user before executing."
         + semantic_memory_prompt(worker_state["semantic_memory"])
     )
     action_agent_exec = create_agent(llm, tools, system_prompt=system_prompt)

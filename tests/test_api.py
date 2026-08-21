@@ -7,6 +7,11 @@ from api.schemas import ChatRequest
 from api.service import SiriAgentService
 
 
+class FakeState:
+    def __init__(self, tasks=None):
+        self.tasks = tasks or []
+
+
 class FakeBuilder:
     def __init__(self, output: str = "Test response from Siri"):
         self.output = output
@@ -18,12 +23,16 @@ class FakeBuilder:
     def create_turn_state(self, messages):
         return {"messages": messages}
 
-    def stream(self, initial_state, stream_mode="values"):
+    def get_state(self, config=None):
+        return FakeState([])
+
+    def stream(self, initial_state, stream_mode="values", config=None):
         class FakeMessage:
             def __init__(self, content):
                 self.content = content
 
-        yield {"messages": initial_state.get("messages", []), "next": "supervisor"}
+        messages = initial_state.get("messages", []) if isinstance(initial_state, dict) else []
+        yield {"messages": messages, "next": "supervisor"}
         yield {"messages": [FakeMessage(self.output)], "next": "output_sanitizer"}
 
 
@@ -31,7 +40,7 @@ class FakeMemoryStore:
     def __init__(self, profile: str = "- Fake memory profile"):
         self.profile = profile
 
-    def format_for_injection(self) -> str:
+    def format_for_injection(self, user_id=None) -> str:
         return self.profile
 
     def get_last_retrieval_metrics(self) -> dict:
@@ -48,6 +57,7 @@ class FastAPITests(unittest.TestCase):
             builder=self.fake_builder,
         )
         self.app = create_app(agent_service=self.service)
+        self.app.state.agent_service = self.service
         self.client = TestClient(self.app)
 
     def test_root_endpoint(self):
@@ -132,6 +142,28 @@ class FastAPITests(unittest.TestCase):
         data = response.json()
         self.assertEqual(data["status"], "success")
         self.assertEqual(data["user_id"], "test_user")
+
+    def test_chat_resume_endpoint(self):
+        response = self.client.post(
+            "/chat/resume",
+            json={"response": "Tokyo", "user_id": "test_user"},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["response"], "Hello! How can I help you today?")
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["user_id"], "test_user")
+
+    def test_chat_resume_stream_endpoint(self):
+        response = self.client.post(
+            "/chat/resume/stream",
+            json={"response": "Tokyo", "user_id": "test_user"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/event-stream", response.headers["content-type"])
+        body = response.text
+        self.assertIn("node_update", body)
+        self.assertIn("complete", body)
 
 
 if __name__ == "__main__":

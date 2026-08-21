@@ -106,7 +106,10 @@ class SiriAgentService:
         initial_state = self.builder.create_turn_state(messages)
 
         tracker = LangSmithTokenTracker()
-        config = {"callbacks": [tracker]}
+        config = {
+            "callbacks": [tracker],
+            "configurable": {"thread_id": str(active_user_id)},
+        }
 
         hop_count = 0
         final_state = initial_state
@@ -118,11 +121,92 @@ class SiriAgentService:
 
         hop_count = max(0, hop_count - 1)
 
+        # Check for LangGraph human-in-the-loop interrupts
+        current_graph_state = getattr(self.builder.graph, "get_state", lambda c: None)(config)
+        interrupts = []
+        if current_graph_state and hasattr(current_graph_state, "tasks"):
+            for t in current_graph_state.tasks:
+                for i in getattr(t, "interrupts", []):
+                    interrupts.append(getattr(i, "value", i))
+
+        if interrupts:
+            interrupt_payload = interrupts[0] if isinstance(interrupts[0], dict) else {"type": "ask_human", "question": str(interrupts[0])}
+            return {
+                "response": "",
+                "hop_count": hop_count,
+                "user_id": active_user_id,
+                "status": "interrupted",
+                "interrupt": interrupt_payload,
+                "token_usage": tracker.get_usage(),
+            }
+
         final_output = ""
         if "messages" in final_state and len(final_state["messages"]) > 0:
             final_output = final_state["messages"][-1].content
 
         # Schedule post-turn memory distillation off the reply path
+        if self.learning_service is not None:
+            self.learning_service.submit_completed_turn(final_state.get("messages", []))
+
+        return {
+            "response": final_output,
+            "hop_count": hop_count,
+            "user_id": active_user_id,
+            "status": "success",
+            "token_usage": tracker.get_usage(),
+        }
+
+    def resume_turn(
+        self,
+        user_id: Optional[str] = None,
+        human_response: str = "",
+    ) -> Dict[str, Any]:
+        """Resume an interrupted conversation turn with the human's response."""
+        if not self._is_initialized:
+            self.initialize()
+
+        active_user_id = user_id or self.default_user_id
+        tracker = LangSmithTokenTracker()
+        config = {
+            "callbacks": [tracker],
+            "configurable": {"thread_id": str(active_user_id)},
+        }
+
+        from langgraph.types import Command
+        resume_command = Command(resume=human_response)
+
+        hop_count = 0
+        final_state = {}
+        for state in self.builder.graph.stream(resume_command, stream_mode="values", config=config):
+            final_state = state
+            hop_count += 1
+            current_node = state.get("next", "")
+            tracker.set_current_node(current_node)
+
+        # Check if there is another interrupt or if completed
+        current_graph_state = getattr(self.builder.graph, "get_state", lambda c: None)(config)
+        interrupts = []
+        if current_graph_state and hasattr(current_graph_state, "tasks"):
+            for t in current_graph_state.tasks:
+                for i in getattr(t, "interrupts", []):
+                    interrupts.append(getattr(i, "value", i))
+
+        if interrupts:
+            interrupt_payload = interrupts[0] if isinstance(interrupts[0], dict) else {"type": "ask_human", "question": str(interrupts[0])}
+            return {
+                "response": "",
+                "hop_count": hop_count,
+                "user_id": active_user_id,
+                "status": "interrupted",
+                "interrupt": interrupt_payload,
+                "token_usage": tracker.get_usage(),
+            }
+
+        hop_count = max(0, hop_count - 1)
+        final_output = ""
+        if "messages" in final_state and len(final_state["messages"]) > 0:
+            final_output = final_state["messages"][-1].content
+
         if self.learning_service is not None:
             self.learning_service.submit_completed_turn(final_state.get("messages", []))
 
@@ -260,7 +344,7 @@ class SiriAgentService:
         if self.learning_service is not None and hasattr(self.learning_service, "queue"):
             self.learning_service.queue.clear()
 
-        print(f"🗑️ [Memory Service] Cleared memory for user '{target_user}' ({cleared_facts} facts removed).")
+        LOGGER.info("[Memory Service] Cleared memory for user '%s' (%d facts removed).", target_user, cleared_facts)
         return {
             "status": "success",
             "message": f"Memory successfully cleared for user '{target_user}'",

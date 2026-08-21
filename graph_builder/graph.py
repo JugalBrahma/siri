@@ -1,4 +1,5 @@
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
 from state.message_state import State, create_turn_state
 from memory.observability import MemoryObserver
 from time import perf_counter
@@ -17,6 +18,7 @@ class GraphBuilder:
         output_sanitizer,
         memory_store=None,
         memory_observer=None,
+        checkpointer=None,
     ):
         self.supervisor = supervisor
         self.sub_infosupervisor = sub_infosupervisor 
@@ -30,6 +32,7 @@ class GraphBuilder:
         # wired. When present, it is read exactly once by create_turn_state.
         self.memory_store = memory_store
         self.memory_observer = memory_observer or MemoryObserver()
+        self.checkpointer = checkpointer if checkpointer is not None else MemorySaver()
         self.graph = None
         
 
@@ -50,13 +53,13 @@ class GraphBuilder:
         graph.add_edge("weather", "sub_infosupervisor")
         graph.add_edge("action", "sub_actionsupervisor")
         graph.add_edge("output_sanitizer", END)
-        self.graph = graph.compile()
+        self.graph = graph.compile(checkpointer=self.checkpointer)
         return self.graph
     
     def _fetch_semantic_memory(self) -> str:
         """Fetch a single durable-memory snapshot for the next graph turn."""
         if self.memory_store is None:
-            print("ℹ️ [Memory Fetch] Semantic memory store is disabled / unconfigured.")
+            print("[Memory Fetch] Semantic memory store is disabled / unconfigured.")
             return ""
 
         started_at = perf_counter()
@@ -70,7 +73,7 @@ class GraphBuilder:
                 profile=profile,
                 metrics=metrics,
             )
-            print(f"🧠 [Memory Fetch] Retrieved {metrics.get('fact_count', 0)} facts in {round(elapsed_ms, 1)}ms: {profile or '(no facts stored yet)'}")
+            print(f"[Memory Fetch] Retrieved {metrics.get('fact_count', 0)} facts in {round(elapsed_ms, 1)}ms: {profile or '(no facts stored yet)'}")
             return profile
         except Exception as exc:
             # Memory retrieval should not prevent the assistant from handling
@@ -80,7 +83,7 @@ class GraphBuilder:
                 elapsed_ms=elapsed_ms,
                 error=exc,
             )
-            print(f"⚠️ [Memory Fetch] Failed after {round(elapsed_ms, 1)}ms: {exc}")
+            print(f"[Memory Fetch] Failed after {round(elapsed_ms, 1)}ms: {exc}")
             return ""
 
     def create_turn_state(self, messages: list) -> State:
@@ -88,12 +91,13 @@ class GraphBuilder:
         semantic_memory = self._fetch_semantic_memory()
         return create_turn_state(messages, semantic_memory)
 
-    def run(self, messages: list) -> dict:
+    def run(self, messages: list, config: dict = None) -> dict:
         """
         Run the agent workflow
         
         Args:
             messages: List of message objects
+            config: Optional config containing thread_id and callbacks
             
         Returns:
             Final state with results
@@ -101,5 +105,5 @@ class GraphBuilder:
         if self.graph is None:
             self.build()
         
-        return self.graph.invoke(self.create_turn_state(messages))
-
+        turn_config = config or {"configurable": {"thread_id": "default_thread"}}
+        return self.graph.invoke(self.create_turn_state(messages), config=turn_config)

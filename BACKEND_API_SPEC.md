@@ -62,11 +62,22 @@ export interface ChatRequest {
   user_id?: string; // Defaults to "siri_user"
 }
 
+export interface InterruptInfo {
+  type: string;
+  question: string;
+}
+
+export interface ResumeChatRequest {
+  user_id?: string;
+  response: string;
+}
+
 export interface ChatResponse {
   response: string;    // Final response text from the agent system
   hop_count: number;   // Total graph nodes/agents traversed
   user_id: string;     // Active user ID
-  status: 'success' | string;
+  status: 'success' | 'interrupted' | 'error' | string;
+  interrupt?: InterruptInfo;
 }
 
 // ==========================
@@ -84,6 +95,13 @@ export interface SSENodeUpdateEvent {
   next: 'guardrail' | 'supervisor' | 'sub_infosupervisor' | 'sub_actionsupervisor' | 'weather' | 'researcher' | 'action' | 'output_sanitizer' | string;
 }
 
+export interface SSEInterruptEvent {
+  event: 'interrupt';
+  user_id: string;
+  interrupt: InterruptInfo;
+  hop: number;
+}
+
 export interface SSECompleteEvent {
   event: 'complete';
   response: string;
@@ -98,6 +116,7 @@ export interface SSEErrorEvent {
 export type SSEStreamEvent = 
   | SSEStartEvent 
   | SSENodeUpdateEvent 
+  | SSEInterruptEvent
   | SSECompleteEvent 
   | SSEErrorEvent;
 

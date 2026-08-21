@@ -60,10 +60,29 @@ class ChatRequest(BaseModel):
         return [{"role": "user", "content": self.message or ""}]
 
 
-class ChatResponse(BaseModel):
-    """Response schema for /chat endpoint."""
+class InterruptInfo(BaseModel):
+    """Details when a graph execution pauses for human input."""
+    type: str = Field(default="ask_human", description="Type of interruption (e.g. ask_human).")
+    question: str = Field(..., description="The clarification question or prompt requested by the agent.")
+
+
+class ResumeChatRequest(BaseModel):
+    """Request schema for resuming an interrupted conversation."""
+    user_id: Optional[str] = Field(
+        default="siri_user",
+        description="User ID matching the thread_id of the paused execution.",
+    )
     response: str = Field(
         ...,
+        description="The human response, answer, or confirmation to provide back to the agent.",
+        examples=["Tokyo"],
+    )
+
+
+class ChatResponse(BaseModel):
+    """Response schema for /chat and /chat/resume endpoints."""
+    response: str = Field(
+        default="",
         description="The final sanitized text response from the multi-agent system.",
     )
     hop_count: int = Field(
@@ -76,7 +95,11 @@ class ChatResponse(BaseModel):
     )
     status: str = Field(
         default="success",
-        description="Execution status.",
+        description="Execution status ('success', 'interrupted', 'error').",
+    )
+    interrupt: Optional[InterruptInfo] = Field(
+        default=None,
+        description="Interruption payload if execution is paused waiting for human input.",
     )
     token_usage: Optional[Dict[str, Any]] = Field(
         default=None,
