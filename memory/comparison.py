@@ -2,7 +2,7 @@
 
 import json
 
-from memory.client import DISTILLATION_MODEL, client
+from memory.client import DISTILLATION_MODEL, client, safe_chat_completion
 
 
 def compare_semantic_facts(existing_statement: str, new_statement: str) -> str:
@@ -13,7 +13,8 @@ def compare_semantic_facts(existing_statement: str, new_statement: str) -> str:
     refinement from a contradiction. On uncertainty, preserve both facts.
     """
     try:
-        response = client.chat.completions.create(
+        response = safe_chat_completion(
+            client,
             model=DISTILLATION_MODEL,
             temperature=0.0,
             max_tokens=20,

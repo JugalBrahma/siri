@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 from openai import OpenAI
 
-load_dotenv()
+load_dotenv(override=True)
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -15,20 +15,28 @@ DISTILLATION_MODEL = DISTILLATION_MODEL_ENV or ("gpt-4o-mini" if OPENAI_API_KEY 
 embedding_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else OpenAI()
 
 # LLM Client for summarization and semantic fact distillation
-if OPENAI_API_KEY and not DISTILLATION_MODEL_ENV:
-    client = OpenAI(api_key=OPENAI_API_KEY)
-elif NVIDIA_API_KEY and any(k in DISTILLATION_MODEL.lower() for k in ["qwen", "nvidia", "deepseek", "nemotron"]):
+if NVIDIA_API_KEY and any(k in DISTILLATION_MODEL.lower() for k in ["qwen", "nvidia", "deepseek", "nemotron", "moonshot", "minimax", "glm"]):
     client = OpenAI(
         base_url="https://integrate.api.nvidia.com/v1",
         api_key=NVIDIA_API_KEY,
     )
-elif GROQ_API_KEY:
+elif GROQ_API_KEY and any(k in DISTILLATION_MODEL.lower() for k in ["llama", "mixtral", "gemma"]):
     client = OpenAI(
         base_url="https://api.groq.com/openai/v1",
         api_key=GROQ_API_KEY,
     )
 elif OPENAI_API_KEY:
     client = OpenAI(api_key=OPENAI_API_KEY)
+elif GROQ_API_KEY:
+    client = OpenAI(
+        base_url="https://api.groq.com/openai/v1",
+        api_key=GROQ_API_KEY,
+    )
+elif NVIDIA_API_KEY:
+    client = OpenAI(
+        base_url="https://integrate.api.nvidia.com/v1",
+        api_key=NVIDIA_API_KEY,
+    )
 else:
     client = OpenAI()
 
@@ -73,14 +81,14 @@ def ensure_namespace_exists(
     dimension: int = PINECONE_DIMENSION,
 ) -> bool:
     """
-    Ensure a Pinecone namespace exists inside the given index.
-    Pinecone creates namespaces lazily on first upsert, so if the
-    namespace is missing we seed a dummy vector and delete it immediately.
+    Check Pinecone index and report namespace status.
+    Pinecone automatically initializes namespaces on the first vector upsert,
+    so no dummy vector seeding is required.
 
-    Returns True if the namespace already existed, False if it was just created.
+    Returns True if the namespace has existing vectors, False if it is ready/empty.
     """
     if index is None:
-        print(f"  [NS] No index provided — skipping namespace check.")
+        print("  [NS] No index provided — skipping namespace check.")
         return False
 
     try:
@@ -88,24 +96,44 @@ def ensure_namespace_exists(
         ns_map = stats.get("namespaces", {})
 
         if namespace in ns_map and ns_map[namespace].get("vector_count", 0) > 0:
-            print(f"  [NS] Namespace '{namespace}' exists "
+            print(f"  [NS] Namespace '{namespace}' ready "
                   f"({ns_map[namespace]['vector_count']} vectors).")
             return True
 
-        # Namespace missing or empty — seed it.
-        dummy_id = "__ns_init_dummy__"
-        print(f"  [NS] Namespace '{namespace}' not found. Creating...")
-        index.upsert(
-            vectors=[{"id": dummy_id, "values": [0.0] * dimension}],
-            namespace=namespace,
-        )
-        index.delete(ids=[dummy_id], namespace=namespace)
-        print(f"  [NS] Namespace '{namespace}' created successfully.")
+        print(f"  [NS] Namespace '{namespace}' ready (will be populated on first memory upsert).")
         return False
 
     except Exception as e:
         print(f"  [NS] Warning: namespace check failed — {e}")
         return False
+
+
+def safe_chat_completion(llm_client, **kwargs):
+    """
+    Execute chat completion with automatic fallback for:
+    - max_tokens vs max_completion_tokens (required for newer OpenAI models)
+    - temperature parameter constraints (e.g. reasoning models like o1/o3 requiring default temperature)
+    """
+    call_kwargs = dict(kwargs)
+    while True:
+        try:
+            return llm_client.chat.completions.create(**call_kwargs)
+        except Exception as e:
+            err_msg = str(e).lower()
+            changed = False
+            if "max_tokens" in err_msg and "max_completion_tokens" in err_msg:
+                if "max_tokens" in call_kwargs:
+                    call_kwargs["max_completion_tokens"] = call_kwargs.pop("max_tokens")
+                    changed = True
+                elif "max_completion_tokens" in call_kwargs:
+                    call_kwargs["max_tokens"] = call_kwargs.pop("max_completion_tokens")
+                    changed = True
+            if "temperature" in err_msg and ("unsupported" in err_msg or "default" in err_msg or "does not support" in err_msg):
+                if "temperature" in call_kwargs:
+                    call_kwargs.pop("temperature")
+                    changed = True
+            if not changed:
+                raise
 
 
 # Auto-ensure the semantic namespace exists at startup.
@@ -118,7 +146,7 @@ def get_embedding(text: str, dimensions: int = PINECONE_DIMENSION) -> list:
     if not embedding_client:
         raise ValueError("OpenAI embedding client is not initialized.")
     response = embedding_client.embeddings.create(
-        model="text-embedding-3-large",
+        model="text-embedding-3-small",
         input=text,
         dimensions=dimensions
     )

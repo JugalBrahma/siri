@@ -19,6 +19,7 @@ from memory.data_model import FactCategory, SemanticFact
 from memory.observability import MemoryObserver
 from memory.runtime import create_configured_memory_store
 from services.token_tracker import LangSmithTokenTracker
+import config.config
 
 LOGGER = logging.getLogger("siri.api.service")
 
@@ -43,7 +44,7 @@ class SiriAgentService:
 
     def initialize(self) -> None:
         """Initialize semantic memory, learning workers, and compile LangGraph."""
-        if self._is_initialized:
+        if self._is_initialized and self.builder is not None and getattr(self.builder, "graph", None) is not None:
             return
 
         # Initialize real memory store if not explicitly injected
@@ -79,8 +80,12 @@ class SiriAgentService:
                 memory_observer=self.memory_observer,
             )
 
-        if self.builder.graph is None:
-            self.builder.build()
+        if getattr(self.builder, "graph", None) is None:
+            if hasattr(self.builder, "build"):
+                self.builder.build()
+
+        if self.builder is None or getattr(self.builder, "graph", None) is None:
+            raise RuntimeError("Failed to initialize SiriAgentService: builder or compiled graph is None.")
 
         self._is_initialized = True
         LOGGER.info("SiriAgentService initialization complete.")
@@ -99,8 +104,16 @@ class SiriAgentService:
         Returns:
             Dict containing final output, hop count, user ID, and exact token usage.
         """
-        if not self._is_initialized:
+        if not self._is_initialized or self.builder is None or getattr(self.builder, "graph", None) is None:
             self.initialize()
+
+        # Defensive: ensure the compiled graph exists even if initialize() skipped build
+        if self.builder is not None and getattr(self.builder, "graph", None) is None:
+            LOGGER.warning("Graph was None after initialize(); attempting explicit build.")
+            self.builder.build()
+
+        if self.builder is None or self.builder.graph is None:
+            raise RuntimeError("Agent workflow is not initialized (builder or graph is None).")
 
         active_user_id = user_id or self.default_user_id
         initial_state = self.builder.create_turn_state(messages)
@@ -162,8 +175,16 @@ class SiriAgentService:
         human_response: str = "",
     ) -> Dict[str, Any]:
         """Resume an interrupted conversation turn with the human's response."""
-        if not self._is_initialized:
+        if not self._is_initialized or self.builder is None or getattr(self.builder, "graph", None) is None:
             self.initialize()
+
+        # Defensive: ensure the compiled graph exists even if initialize() skipped build
+        if self.builder is not None and getattr(self.builder, "graph", None) is None:
+            LOGGER.warning("Graph was None after initialize(); attempting explicit build.")
+            self.builder.build()
+
+        if self.builder is None or self.builder.graph is None:
+            raise RuntimeError("Agent workflow is not initialized (builder or graph is None).")
 
         active_user_id = user_id or self.default_user_id
         tracker = LangSmithTokenTracker()

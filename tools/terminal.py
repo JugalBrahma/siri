@@ -68,49 +68,6 @@ def modify_file(file_path: str, content: str, mode: str = "overwrite") -> str:
 
 
 # ---------------------------------------------------------
-# 4. Create a brand new .docx file (no Word needed open/installed... well, python-docx needed)
+# Exported terminal & file action tools
 # ---------------------------------------------------------
-@tool
-def write_to_word(file_path: str, content: str) -> str:
-    """
-    Creates or overwrites a Word document (.docx) with the given text content.
-    Each line in 'content' becomes its own paragraph.
-    Requires: pip install python-docx
-    """
-    try:
-        # pyrefly: ignore [missing-import]
-        from docx import Document
-        doc = Document()
-        for line in content.split("\n"):
-            doc.add_paragraph(line)
-        doc.save(file_path)
-        return f"Successfully wrote to {file_path}"
-    except Exception as e:
-        return f"Failed to write Word file: {str(e)}"
-
-
-# ---------------------------------------------------------
-# 5. Type into an ALREADY OPEN Word window (live automation)
-# ---------------------------------------------------------
-@tool
-def write_to_open_word(text: str) -> str:
-    """
-    Inserts text into the currently active (already open) Word document.
-    Requires: pip install pywin32
-    Requires Microsoft Word to be installed and currently running with a doc open.
-    """
-    try:
-        import win32com.client
-        word = win32com.client.GetObject(Class="Word.Application")
-        doc = word.ActiveDocument
-        doc.Content.InsertAfter(text)
-        return "Text inserted into active Word document."
-    except Exception as e:
-        return f"Failed to interact with Word: {str(e)}"
-
-
-# ---------------------------------------------------------
-# Example: registering these tools with an agent (LangChain style)
-# ---------------------------------------------------------
-# tools = [run_terminal_command, read_file, modify_file, write_to_word, write_to_open_word]
-# agent = create_react_agent(llm, tools, ...)  # wire into your existing agent setup
+terminal_tools = [run_terminal_command, read_file, modify_file]

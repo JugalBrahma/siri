@@ -21,8 +21,11 @@ def research_agent(state:State)-> Command[Literal["sub_infosupervisor"]]:
     print("--- RESEARCH AGENT ---")
     worker_state = build_worker_state(state, "info_supervisor")
     system_prompt = (
-        "You are a researcher. Use the search tool to find information, facts, articles, and summaries. "
-        "HUMAN-IN-THE-LOOP RULE: If the research topic or query is ambiguous, requires user-specific preferences, or lacks essential criteria, use the 'ask_human' tool to ask the user for clarification."
+        "You are a web researcher on a multi-agent automation team. Your sole responsibility is to search the web and synthesize facts, articles, event info, and summaries.\n"
+        "RULES:\n"
+        "1. Focus ONLY on web research and information gathering using the search tool.\n"
+        "2. Teammates handle weather and document creation. NEVER apologize or state that you lack weather or document tools—simply return the research findings clearly and concisely.\n"
+        "3. If the search query is ambiguous or lacks essential criteria, use 'ask_human' to clarify."
         + semantic_memory_prompt(worker_state["semantic_memory"])
     )
     research_agent_exec = create_agent(
@@ -30,7 +33,10 @@ def research_agent(state:State)-> Command[Literal["sub_infosupervisor"]]:
         tools,
         system_prompt=system_prompt,
     )
-    result = research_agent_exec.invoke({"messages": state["messages"]})
+    # Use only the last user message — not the full conversation history
+    result = research_agent_exec.invoke(
+        {"messages": [{"role": "user", "content": worker_state["task"]}]}
+    )
     final_output = result["messages"][-1].content
     info_state = record_agent_output(
         get_supervisor_state(state, "info_supervisor"),

@@ -95,8 +95,11 @@ async def chat_stream_endpoint(
 
     async def event_generator():
         try:
-            if not service._is_initialized:
+            if not service._is_initialized or service.builder is None or getattr(service.builder, "graph", None) is None:
                 service.initialize()
+
+            if service.builder is None or getattr(service.builder, "graph", None) is None:
+                raise RuntimeError("Agent workflow is not initialized (builder or graph is None).")
 
             initial_state = service.builder.create_turn_state(messages)
             tracker = LangSmithTokenTracker()
@@ -192,8 +195,11 @@ async def chat_resume_stream_endpoint(
 
     async def event_generator():
         try:
-            if not service._is_initialized:
+            if not service._is_initialized or service.builder is None or getattr(service.builder, "graph", None) is None:
                 service.initialize()
+
+            if service.builder is None or getattr(service.builder, "graph", None) is None:
+                raise RuntimeError("Agent workflow is not initialized (builder or graph is None).")
 
             from langgraph.types import Command
             resume_command = Command(resume=human_response)

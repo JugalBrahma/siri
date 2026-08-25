@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 from langsmith import traceable
 
-load_dotenv()
+load_dotenv(override=True)
 
 try:
     import nest_asyncio

@@ -1,5 +1,7 @@
 # agents/guardrail_agent.py
 import asyncio
+import re
+
 try:
     import nest_asyncio
     nest_asyncio.apply()
@@ -13,20 +15,48 @@ from typing import Literal
 from state.message_state import State
 # pyrefly: ignore [missing-import]
 from nemoguardrails import RailsConfig, LLMRails
-from models.models import llm
+from models.models import guardrail_llm
 
 REFUSAL_FALLBACK = (
     "I'm sorry, but I can't process that request. "
     "It appears to violate my safety guidelines."
 )
 
+# Patterns that are overwhelmingly safe — skip the full NeMo pipeline.
+# Kept conservative: only well-known benign intents.
+_SAFE_PATTERN = re.compile(
+    r"(?:what(?:'s| is)|how(?:'s| is)|tell me|show me|get|check|find|give me)?\s*"
+    r"(?:the\s+)?(?:weather|forecast|temperature|time|date|hello|hi|hey|"
+    r"thanks|thank you|good morning|good evening)",
+    re.IGNORECASE,
+)
+
 rails_config = RailsConfig.from_path("./config/guardrails")
-rails = LLMRails(rails_config, llm=llm)
+rails = LLMRails(rails_config, llm=guardrail_llm)  # type: ignore[arg-type]  # NeMo wraps LangChain LLMs internally
 
 
-def guardrail_agent(state: State) -> Command[Literal["supervisor", END]]:
-    raw_input = state["messages"][-1].content if state.get("messages") else ""
+def guardrail_agent(state: State) -> Command[Literal["supervisor", "__end__"]]:
+    last_msg = state["messages"][-1] if state.get("messages") else None
+    if not last_msg:
+        return Command(goto="supervisor")
+
+    raw_content = last_msg.content
+    if isinstance(raw_content, str):
+        raw_input = raw_content
+    elif isinstance(raw_content, list):
+        raw_input = " ".join(
+            item if isinstance(item, str) else str(item.get("text", "")) if isinstance(item, dict) else str(item)
+            for item in raw_content
+        )
+    else:
+        raw_input = str(raw_content)
+
+    raw_input = raw_input.strip()
     if not raw_input:
+        return Command(goto="supervisor")
+
+    # Fast-path: skip NeMo for obviously safe, short inputs
+    if _SAFE_PATTERN.search(raw_input) and len(raw_input) < 200:
         return Command(goto="supervisor")
 
     try:

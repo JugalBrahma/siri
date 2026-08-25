@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List
 
-from memory.client import DISTILLATION_MODEL, client
+from memory.client import DISTILLATION_MODEL, client, safe_chat_completion
 from memory.data_model import FactCategory, SemanticFact
 from memory.prompt import DISTILLATION_PROMPT
 
@@ -27,7 +27,8 @@ def summarize_episode(messages: Iterable[Any]) -> str:
     if not conversation:
         return ""
 
-    response = client.chat.completions.create(
+    response = safe_chat_completion(
+        client,
         model=DISTILLATION_MODEL,
         max_tokens=180,
         temperature=0.0,
@@ -53,7 +54,8 @@ def distil_episodes_to_facts(
         for index, episode in enumerate(episode_summaries)
     )
 
-    response = client.chat.completions.create(
+    response = safe_chat_completion(
+        client,
         model=DISTILLATION_MODEL,
         max_tokens=800,
         temperature=0.0,
@@ -70,7 +72,8 @@ def distil_episodes_to_facts(
         ],
     )
 
-    raw_facts = json.loads(response.choices[0].message.content).get("facts", [])
+    content = response.choices[0].message.content
+    raw_facts = json.loads(content).get("facts", []) if content else []
     episode_ids = [episode.get("episode_id", "") for episode in episode_summaries]
     now = datetime.now(timezone.utc).isoformat()
     facts: List[SemanticFact] = []
