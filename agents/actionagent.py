@@ -29,18 +29,25 @@ def action_agent(state:State)-> Command[Literal["sub_actionsupervisor"]]:
     print("--- ACTION AGENT ---")
     worker_state = build_worker_state(state, "action_supervisor")
     system_prompt = (
-        "You are an automation agent. You have tools to execute terminal commands, modify files, manipulate MS Word documents via Office Word MCP tools, and ask the human user for clarification.\n"
+        "You are an automation agent. You have tools to execute terminal commands, modify files, manipulate MS Word documents, and ask the human user for clarification.\n"
         "MS WORD RULES:\n"
-        "1. Use the dedicated Word MCP tools (create_document, add_heading, add_paragraph, add_table) to create, inspect, and modify Word (.docx) documents.\n"
-        "2. AUTOMATIC LAUNCH: After completing the creation or editing of any Word (.docx) document, ALWAYS call the 'open_word_document' tool with the file path so Microsoft Word automatically launches and displays the document to the user.\n"
+        "1. Prefer using 'create_complete_word_document' to write articles, reports, or research summaries into Word in a SINGLE step (it formats headings, bullets, paragraphs, and automatically launches Word).\n"
+        "2. If fine-grained editing of an existing document is needed, use create_document, add_heading, add_paragraph, add_table.\n"
+        "3. AUTOMATIC LAUNCH: If not using create_complete_word_document, ALWAYS call 'open_word_document' with the file path after editing.\n"
         "HUMAN-IN-THE-LOOP RULE: If critical information (e.g. file path, specific command parameters, or confirmation for destructive actions) is missing or ambiguous, use the 'ask_human' tool to ask the user before executing."
         + semantic_memory_prompt(worker_state["semantic_memory"])
     )
     active_tools = get_action_tools()
     action_agent_exec = create_agent(llm, active_tools, system_prompt=system_prompt)
 
+    main_state = get_supervisor_state(state, "main_supervisor")
+    gathered_info = main_state.get("agent_outputs", {}).get("sub_infosupervisor", "")
+    task_prompt = worker_state["task"]
+    if gathered_info:
+        task_prompt += f"\n\nGathered Information / Research Content from previous step:\n{gathered_info}"
+
     result = action_agent_exec.invoke(
-        {"messages": [{"role": "user", "content": worker_state["task"]}]}
+        {"messages": [{"role": "user", "content": task_prompt}]}
     )
     final_output = result["messages"][-1].content
     action_state = record_agent_output(

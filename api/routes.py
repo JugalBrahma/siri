@@ -98,8 +98,13 @@ async def chat_stream_endpoint(
             if not service._is_initialized or service.builder is None or getattr(service.builder, "graph", None) is None:
                 service.initialize()
 
-            if service.builder is None or getattr(service.builder, "graph", None) is None:
-                raise RuntimeError("Agent workflow is not initialized (builder or graph is None).")
+            # Ensure builder's graph is compiled even if initialize() did not build it
+            if service.builder is not None and getattr(service.builder, "graph", None) is None:
+                if hasattr(service.builder, "build"):
+                    service.builder.build()
+
+            if service.builder is None:
+                raise RuntimeError("Agent workflow is not initialized (builder is None).")
 
             initial_state = service.builder.create_turn_state(messages)
             tracker = LangSmithTokenTracker()
@@ -113,7 +118,10 @@ async def chat_stream_endpoint(
 
             yield f"data: {json.dumps({'event': 'start', 'user_id': active_user_id})}\n\n"
 
-            for state in service.builder.graph.stream(initial_state, stream_mode="values", config=config):
+            # Stream via builder.stream()
+            stream_iter = service.builder.stream(initial_state, stream_mode="values", config=config)
+
+            for state in stream_iter:
                 final_state = state
                 hop_count += 1
                 current_node = state.get("next", "")
@@ -121,7 +129,8 @@ async def chat_stream_endpoint(
                 yield f"data: {json.dumps({'event': 'node_update', 'hop': hop_count, 'next': current_node})}\n\n"
 
             # Check if execution paused on an interrupt
-            current_graph_state = getattr(service.builder.graph, "get_state", lambda c: None)(config)
+            state_getter = getattr(service.builder, "get_state", None) or getattr(getattr(service.builder, "graph", None), "get_state", lambda c: None)
+            current_graph_state = state_getter(config) if callable(state_getter) else None
             interrupts = []
             if current_graph_state and hasattr(current_graph_state, "tasks"):
                 for t in current_graph_state.tasks:
@@ -198,8 +207,13 @@ async def chat_resume_stream_endpoint(
             if not service._is_initialized or service.builder is None or getattr(service.builder, "graph", None) is None:
                 service.initialize()
 
-            if service.builder is None or getattr(service.builder, "graph", None) is None:
-                raise RuntimeError("Agent workflow is not initialized (builder or graph is None).")
+            # Ensure builder's graph is compiled even if initialize() did not build it
+            if service.builder is not None and getattr(service.builder, "graph", None) is None:
+                if hasattr(service.builder, "build"):
+                    service.builder.build()
+
+            if service.builder is None:
+                raise RuntimeError("Agent workflow is not initialized (builder is None).")
 
             from langgraph.types import Command
             resume_command = Command(resume=human_response)
@@ -215,14 +229,19 @@ async def chat_resume_stream_endpoint(
 
             yield f"data: {json.dumps({'event': 'start', 'user_id': active_user_id})}\n\n"
 
-            for state in service.builder.graph.stream(resume_command, stream_mode="values", config=config):
+            # Stream via builder.stream()
+            stream_iter = service.builder.stream(resume_command, stream_mode="values", config=config)
+
+            for state in stream_iter:
                 final_state = state
                 hop_count += 1
                 current_node = state.get("next", "")
                 tracker.set_current_node(current_node)
                 yield f"data: {json.dumps({'event': 'node_update', 'hop': hop_count, 'next': current_node})}\n\n"
 
-            current_graph_state = getattr(service.builder.graph, "get_state", lambda c: None)(config)
+            # Check if execution paused on an interrupt
+            state_getter = getattr(service.builder, "get_state", None) or getattr(getattr(service.builder, "graph", None), "get_state", lambda c: None)
+            current_graph_state = state_getter(config) if callable(state_getter) else None
             interrupts = []
             if current_graph_state and hasattr(current_graph_state, "tasks"):
                 for t in current_graph_state.tasks:

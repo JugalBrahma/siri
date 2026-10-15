@@ -1,8 +1,12 @@
+from typing import Any, Literal, Optional, Sequence, Union
+from time import perf_counter
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from state.message_state import State, create_turn_state
 from memory.observability import MemoryObserver
-from time import perf_counter
+
+StreamMode = Literal['checkpoints', 'custom', 'debug', 'messages', 'tasks', 'updates', 'values']
 
 class GraphBuilder:
 
@@ -33,7 +37,7 @@ class GraphBuilder:
         self.memory_store = memory_store
         self.memory_observer = memory_observer or MemoryObserver()
         self.checkpointer = checkpointer if checkpointer is not None else MemorySaver()
-        self.graph = None
+        self.graph: Any = None
         
 
     def build(self):
@@ -91,7 +95,7 @@ class GraphBuilder:
         semantic_memory = self._fetch_semantic_memory()
         return create_turn_state(messages, semantic_memory)
 
-    def run(self, messages: list, config: dict = None) -> dict:
+    def run(self, messages: list, config: Optional[RunnableConfig] = None) -> dict:
         """
         Run the agent workflow
         
@@ -103,7 +107,41 @@ class GraphBuilder:
             Final state with results
         """
         if self.graph is None:
-            self.build()
+            self.graph = self.build()
+            if self.graph is None:
+                raise RuntimeError("Failed to build the graph: self.build() returned None.")
         
-        turn_config = config or {"configurable": {"thread_id": "default_thread"}}
+        turn_config: RunnableConfig = config or {"configurable": {"thread_id": "default_thread"}}
         return self.graph.invoke(self.create_turn_state(messages), config=turn_config)
+
+    def stream(
+        self,
+        input_data: Any,
+        stream_mode: Union[StreamMode, Sequence[StreamMode]] = "values",
+        config: Optional[RunnableConfig] = None,
+    ):
+        """Stream the agent workflow execution with automatic compilation.
+        
+        Args:
+            input_data: Initial state dict or Command object (e.g. Command(resume=...)).
+            stream_mode: LangGraph stream mode (default: 'values').
+            config: Optional configuration dictionary.
+            
+        Yields:
+            State dicts as nodes in the graph execute.
+        """
+        if self.graph is None:
+            self.graph = self.build()
+            if self.graph is None:
+                raise RuntimeError("Failed to build the graph: self.build() returned None.")
+        
+        turn_config: RunnableConfig = config or {"configurable": {"thread_id": "default_thread"}}
+        return self.graph.stream(input_data, config=turn_config, stream_mode=stream_mode)
+
+    def get_state(self, config: Optional[RunnableConfig] = None):
+        """Get the current graph state for the given configuration."""
+        if self.graph is None:
+            self.graph = self.build()
+            if self.graph is None:
+                raise RuntimeError("Failed to build the graph: self.build() returned None.")
+        return self.graph.get_state(config)

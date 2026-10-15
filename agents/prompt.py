@@ -3,7 +3,7 @@ main_supervisor_members = ["sub_infosupervisor", "sub_actionsupervisor"]
 main_supervisor_prompt = f"""
 You are the Main Supervisor managing a multi-level task delegation system with the following sub-supervisors: {main_supervisor_members}.
 
-Your objective is to analyze the conversation and user request, then output a structured decision specifying the next step and reasoning.
+Your objective is to analyze the user request and completed agent outputs, then output a structured decision specifying the next step and reasoning.
 
 ### Routing Guidelines:
 
@@ -21,8 +21,12 @@ Your objective is to analyze the conversation and user request, then output a st
 ### Multi-Step Pipeline Rule (e.g. Gather Info ➡️ Create Document):
 If the user's request requires gathering information (weather, facts, web search) AND creating/editing a document or executing an action:
 1. FIRST route to "sub_infosupervisor" to gather the information.
-2. When the sub-info supervisor returns the gathered data, route to "sub_actionsupervisor" so the action worker can use that gathered data to create the document or execute the action.
-3. Once the action worker has completed the document/action, route to "FINISH".
+2. When the sub-info supervisor returns the gathered data (marked [STATUS: DONE]), route to "sub_actionsupervisor" so the action worker can use that gathered data to create the document or execute the action.
+3. Once the action worker has completed the document/action (marked [STATUS: DONE]), route to "FINISH".
+
+### Re-Routing Prevention & Status Rules:
+1. NEVER route back to any sub-supervisor or worker that is already marked [STATUS: DONE].
+2. If "sub_infosupervisor" is marked [STATUS: DONE] and the user did NOT request any file creation or terminal action, route directly to "FINISH".
 
 ### Rules for Greetings, Chit-Chat, & Direct Responses:
 If the user's message is a greeting, appreciation, or casual conversation that requires no sub-supervisor:
@@ -39,7 +43,7 @@ info_supervisor_members = ["researcher", "weather", "supervisor"]
 sub_info_supervisor_prompt = f"""
 You are the Information Gathering Supervisor managing the following specialized workers: {info_supervisor_members}.
 
-Your objective is to analyze the conversation history and the latest request, then output a structured decision specifying the next worker and reasoning.
+Your objective is to analyze the conversation history, user request, and completed agent outputs, then output a structured decision specifying the next worker and reasoning.
 
 ### Worker Capabilities & Routing Guidelines:
 
@@ -58,8 +62,12 @@ Your objective is to analyze the conversation history and the latest request, th
 ### Multi-Worker Rule (e.g. Weather + Web Search):
 If the user asks for BOTH weather and web research/events:
 1. Route to "weather" (or "researcher") first.
-2. When the first worker finishes and the other information is still missing, route to the second worker.
+2. When the first worker finishes (marked [STATUS: DONE]) and the other information is still missing, route to the second worker.
 3. Once all required info is gathered, route back to "supervisor".
+
+### Re-Routing Prevention Rules:
+1. NEVER route back to any worker that is already marked [STATUS: DONE].
+2. If the requested information is already gathered in the completed outputs, route to "supervisor" immediately.
 
 ### Operational Constraints:
 1. Always output a valid structured decision with `reasoning` and `next`.
@@ -70,7 +78,7 @@ If the user asks for BOTH weather and web research/events:
 sub_action_supervisor_prompt = f"""
 You are the Action Execution Supervisor managing task execution workflows.
 
-Your objective is to analyze the conversation history and latest request, then output a structured decision specifying the next step and reasoning.
+Your objective is to analyze the conversation history, user request, and completed agent outputs, then output a structured decision specifying the next step and reasoning.
 
 ### Worker Capabilities & Routing Guidelines:
 
@@ -79,9 +87,13 @@ Your objective is to analyze the conversation history and latest request, then o
 
 - "supervisor": 
   Route back to the main supervisor when:
-  1. The 'action' worker has successfully completed the requested task.
+  1. The 'action' worker has successfully completed the requested task (marked [STATUS: DONE]).
   2. The request requires research or information gathering rather than action execution.
   3. The request is conversational or completed.
+
+### Re-Routing Prevention Rules:
+1. NEVER route back to 'action' if it is already marked [STATUS: DONE].
+2. Once execution is complete, route to "supervisor".
 
 ### Operational Constraints:
 1. Always output a valid structured decision with `reasoning` and `next`.

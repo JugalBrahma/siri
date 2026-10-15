@@ -154,34 +154,95 @@ def open_word_document(file_path: str) -> str:
 
 
 # ==============================================================================
+# FAST SINGLE-SHOT WORD DOCUMENT CREATOR
+# ==============================================================================
+@tool("create_complete_word_document")
+def create_complete_word_document(file_path: str, title: str, content: str) -> str:
+    """
+    Creates a complete MS Word (.docx) document in a SINGLE step with a formatted title and content,
+    and automatically launches Microsoft Word on the user's desktop.
+    Use this tool whenever you need to write articles, reports, or research summaries into Word.
+
+    Args:
+        file_path (str): The path/name of the .docx file to create (e.g. 'ai_trend.docx').
+        title (str): The main document title.
+        content (str): The full body text (supports markdown headings ##, ###, bullet points, numbers).
+    """
+    import os
+    import subprocess
+
+    try:
+        abs_path = os.path.abspath(file_path)
+        try:
+            import docx
+            doc = docx.Document()
+            doc.add_heading(title, level=0)
+
+            for line in content.split("\n"):
+                line_str = line.strip()
+                if not line_str:
+                    continue
+                if line_str.startswith("### "):
+                    doc.add_heading(line_str[4:], level=2)
+                elif line_str.startswith("## "):
+                    doc.add_heading(line_str[3:], level=1)
+                elif line_str.startswith("# "):
+                    doc.add_heading(line_str[2:], level=1)
+                elif line_str.startswith("- ") or line_str.startswith("• "):
+                    doc.add_paragraph(line_str[2:], style="List Bullet")
+                elif line_str.startswith("1. ") or line_str.startswith("2. ") or line_str.startswith("3. "):
+                    doc.add_paragraph(line_str)
+                else:
+                    doc.add_paragraph(line_str)
+
+            doc.save(abs_path)
+        except ImportError:
+            # Fallback to MCP tools
+            raw_tools = fetch_mcp_word_tools_sync()
+            tool_dict = {t.name: t for t in raw_tools}
+            if "create_document" in tool_dict:
+                tool_dict["create_document"].invoke({"file_path": file_path})
+            if "add_heading" in tool_dict:
+                tool_dict["add_heading"].invoke({"file_path": file_path, "text": title, "level": 1})
+            if "add_paragraph" in tool_dict:
+                tool_dict["add_paragraph"].invoke({"file_path": file_path, "text": content})
+
+        # Automatically open in desktop Word
+        if os.path.exists(abs_path):
+            if hasattr(os, "startfile"):
+                os.startfile(abs_path)
+            else:
+                subprocess.Popen(["start", "", abs_path], shell=True)
+
+        return f"Successfully created complete Word document at '{abs_path}' and opened in Microsoft Word."
+    except Exception as exc:
+        return f"Failed to create Word document: {str(exc)}"
+
+
+# ==============================================================================
 # WORD MCP TOOL FILTERING CONFIGURATION
-# ------------------------------------------------------------------------------
-# Set ALLOWED_WORD_TOOLS to filter down to essential tools to stay within strict
-# TPM rate limits (e.g. Groq free tier 8k limit).
-#
-# When using a high-capacity LLM (e.g., Llama-3.3-70B, GPT-4o, Claude, NVIDIA NIM),
-# simply set ALLOWED_WORD_TOOLS = None (or uncomment the line below) to load ALL tools.
 # ==============================================================================
 ALLOWED_WORD_TOOLS: Optional[set[str]] = {
+    "create_complete_word_document",
     "create_document",
     "add_heading",
     "add_paragraph",
     "add_table",
     "open_word_document",
 }
-# UNCOMMENT BELOW TO LOAD ALL 9+ WORD TOOLS (WHEN USING HIGH-TIER LLM):
-# ALLOWED_WORD_TOOLS = None
 
 
 def get_word_tools(filter_essential: bool = True) -> List[BaseTool]:
-    """Return the list of Word MCP tools plus desktop open_word_document tool."""
+    """Return the list of Word MCP tools plus helper tools."""
     global _cached_word_tools
     if _cached_word_tools is None:
         tools = fetch_mcp_word_tools_sync()
     else:
         tools = list(_cached_word_tools)
 
-    all_tools = [open_word_document] + [t for t in tools if t.name != "open_word_document"]
+    custom_tools = [create_complete_word_document, open_word_document]
+    custom_names = {t.name for t in custom_tools}
+    all_tools = custom_tools + [t for t in tools if t.name not in custom_names]
 
     if filter_essential and ALLOWED_WORD_TOOLS is not None:
         filtered = [t for t in all_tools if t.name in ALLOWED_WORD_TOOLS]
@@ -194,4 +255,4 @@ try:
     word_tools: List[BaseTool] = get_word_tools()
 except Exception as e:
     LOGGER.warning("Initial sync fetch of Word MCP tools deferred: %s", e)
-    word_tools = [open_word_document]
+    word_tools = [create_complete_word_document, open_word_document]

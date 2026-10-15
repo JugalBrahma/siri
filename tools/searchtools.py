@@ -57,9 +57,38 @@ def fetch_mcp_search_tools_sync() -> List[BaseTool]:
         return asyncio.run(fetch_mcp_search_tools_async())
 
 
+def _format_search_results(raw_result: Any) -> str:
+    """Format and compact search results to prevent massive token inflation."""
+    import json
+    if isinstance(raw_result, str):
+        try:
+            parsed = json.loads(raw_result)
+            raw_result = parsed
+        except Exception:
+            return raw_result[:2500] if len(raw_result) > 2500 else raw_result
+
+    if isinstance(raw_result, dict):
+        results = raw_result.get("results", [])
+    elif isinstance(raw_result, list):
+        results = raw_result
+    else:
+        return str(raw_result)[:2500]
+
+    formatted = []
+    for item in results[:3]:  # Top 3 high-relevance results
+        if isinstance(item, dict):
+            title = item.get("title", "No Title")
+            content = item.get("content", item.get("snippet", ""))[:400]
+            url = item.get("url", "")
+            formatted.append(f"• **{title}**\n  {content}\n  Source: {url}")
+        else:
+            formatted.append(str(item)[:400])
+    return "\n\n".join(formatted) if formatted else str(raw_result)[:2500]
+
+
 @tool("tavily_search")
-def search_tool(query: str, max_results: int = 5) -> str:
-    """Search the web using Tavily Search API via MCP server for up-to-date facts, information, and research articles."""
+def search_tool(query: str, max_results: int = 3) -> str:
+    """Search the web using Tavily Search API for up-to-date facts, information, and research articles."""
     try:
         client = get_mcp_client()
 
@@ -67,9 +96,11 @@ def search_tool(query: str, max_results: int = 5) -> str:
             tools = await client.get_tools()
             for t in tools:
                 if "search" in t.name.lower():
-                    return await t.ainvoke({"query": query, "max_results": max_results})
+                    raw = await t.ainvoke({"query": query, "max_results": max_results})
+                    return _format_search_results(raw)
             if tools:
-                return await tools[0].ainvoke({"query": query, "max_results": max_results})
+                raw = await tools[0].ainvoke({"query": query, "max_results": max_results})
+                return _format_search_results(raw)
             return "Error: No search tools returned from MCP server."
 
         try:

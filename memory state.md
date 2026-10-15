@@ -25,8 +25,26 @@ Give every user turn one consistent, read-only snapshot of reliable semantic mem
 - [x] Add unit tests with a fake memory store proving one fetch per turn, scope isolation, overwrite semantics, and no worker scratchpad leakage.
 - [x] Add privacy-safe metrics for memory retrieval and distillation: timing, fact counts, profile size, confidence range, action counts, and error type only.
 
+## Supervisor Routing & Agent Completion Status Specification
+
+- **Completed Task Marking (`[STATUS: DONE]`)**:
+  - When an agent or sub-supervisor completes its execution, its output is recorded in `agent_outputs` under its registered name (e.g. `researcher`, `weather`, `sub_infosupervisor`, `sub_actionsupervisor`).
+  - When returning control to the supervisor, the supervisor context explicitly renders each completed worker and its latest result with `[STATUS: DONE]`.
+- **Re-Routing Prevention Rule**:
+  - The supervisor prompt and routing logic MUST NEVER route back to any sub-supervisor or worker that is already marked `[STATUS: DONE]`.
+  - For single-purpose tasks (e.g., pure weather or research queries), once the sub-supervisor returns with `[STATUS: DONE]` and no subsequent action is requested, the supervisor immediately selects `FINISH` (eliminates 16-hop ping-pong loops).
+- **Multi-Step Pipeline Hand-off (Info ➡️ Action ➡️ FINISH)**:
+  - When a task requires both information gathering and action/file creation (e.g., "Research AI news and write to ai_trend.docx"):
+    1. Main supervisor routes first to `sub_infosupervisor`.
+    2. `sub_infosupervisor` executes `researcher` (or `weather`) and returns back to the Main Supervisor with `sub_infosupervisor [STATUS: DONE]`.
+    3. Main supervisor inspects the pending action, sees `sub_infosupervisor` is `DONE`, and routes the accumulated context to `sub_actionsupervisor`.
+    4. `sub_actionsupervisor` executes `action` (e.g., Word MCP tool) and returns `sub_actionsupervisor [STATUS: DONE]`.
+    5. Main supervisor sees all sub-tasks are `DONE` and routes to `output_sanitizer` / `FINISH`.
+
 ## Next steps
 
+- [x] Update `supervisor_agent.py` and `prompt.py` to render `[STATUS: DONE]` in supervisor context and enforce the no-reroute rule.
+- [x] Remove the premature return-path shortcut from `sub_infosupervisor` so multi-step pipelines cleanly return to the Main Supervisor.
 - [ ] Add a database-backed metadata repository before multi-process or multi-user deployment; the current JSON repository is intentionally local and single-process.
 - [ ] Add integration tests against a non-production Pinecone index and a mocked OpenAI client.
 - [ ] Add a user-facing memory settings flow for review, correction, deletion, and opt-out.

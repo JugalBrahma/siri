@@ -5,9 +5,11 @@ worker's retry data, tool responses, and errors belong to ``WorkerState``
 created inside that worker and are never returned to LangGraph.
 """
 
-from typing import Any, Dict, List, Literal, Mapping, Optional, TypedDict
+from typing import Annotated, Any, Dict, List, Literal, Mapping, Optional
+from typing_extensions import TypedDict
 
-from langgraph.graph import MessagesState
+from langchain_core.messages import AnyMessage
+from langgraph.graph.message import add_messages
 from pydantic import BaseModel
 
 
@@ -29,7 +31,7 @@ class SupervisorState(TypedDict):
     semantic_memory: str
 
 
-class State(MessagesState):
+class State(TypedDict):
     """Top-level LangGraph state.
 
     Each supervisor key contains a separate ``SupervisorState`` instance.
@@ -37,6 +39,7 @@ class State(MessagesState):
     their scratchpad.
     """
 
+    messages: Annotated[List[AnyMessage], add_messages]
     next: str
     main_supervisor: SupervisorState
     info_supervisor: SupervisorState
@@ -154,6 +157,8 @@ def create_turn_state(messages: List[Any], semantic_memory: str = "") -> State:
         "messages": messages,
         "next": "",
         "main_supervisor": new_supervisor_state(semantic_memory),
+        "info_supervisor": new_supervisor_state(),
+        "action_supervisor": new_supervisor_state(),
     }
 
 
