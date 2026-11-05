@@ -1,258 +1,148 @@
-import asyncio
-import logging
-from typing import Dict, List, Optional
-from langchain_core.tools import BaseTool
-from langchain_mcp_adapters.client import Connection, MultiServerMCPClient
-from dotenv import load_dotenv
+import os
+import subprocess
+import sys
 
-load_dotenv()
+import docx
+from langchain_core.tools import tool
 
-LOGGER = logging.getLogger("siri.tools.word_tools")
+from tools.terminal import _resolve_in_workspace
 
 
-def get_word_mcp_server_connections() -> dict[str, Connection]:
-    """Build connection configuration for the local Office Word MCP server via uvx."""
-    return {
-        "word_server": {
-            "command": "uvx",
-            "args": ["--from", "office-word-mcp-server", "word_mcp_server"],
-            "transport": "stdio",
-        }
-    }
+def _workspace_docx(file_path: str) -> str:
+    """Resolve a .docx path inside the workspace; raise ValueError otherwise."""
+    if not file_path.lower().endswith(".docx"):
+        file_path += ".docx"
+    return _resolve_in_workspace(file_path)
 
 
-WORD_MCP_SERVER_CONNECTIONS: dict[str, Connection] = get_word_mcp_server_connections()
-
-_word_mcp_client: Optional[MultiServerMCPClient] = None
-_cached_word_tools: Optional[List[BaseTool]] = None
-
-
-def get_word_mcp_client() -> MultiServerMCPClient:
-    """Get or create the MultiServerMCPClient instance for Word MCP Server."""
-    global _word_mcp_client
-    if _word_mcp_client is None:
-        _word_mcp_client = MultiServerMCPClient(get_word_mcp_server_connections())
-    return _word_mcp_client
+def _prepare_path(file_path: str) -> str:
+    """Return a workspace-confined absolute path and make sure its folder exists."""
+    path = _workspace_docx(file_path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    return path
 
 
-def _wrap_sync_tool(tool: BaseTool) -> BaseTool:
-    """Ensure an async StructuredTool supports synchronous execution."""
-    if getattr(tool, "func", None) is not None:
-        return tool
-
-    coro = getattr(tool, "coroutine", None)
-    if coro is None:
-        return tool
-
-    def sync_runner(*args, **kwargs):
-        async def _execute():
-            if kwargs:
-                return await coro(**kwargs)
-            elif args and isinstance(args[0], dict):
-                return await coro(**args[0])
-            elif args:
-                return await coro(*args)
-            return await coro()
-
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import nest_asyncio
-
-                nest_asyncio.apply()
-                return loop.run_until_complete(_execute())
-            else:
-                return asyncio.run(_execute())
-        except Exception:
-            return asyncio.run(_execute())
-
-    try:
-        tool.func = sync_runner  # type: ignore[attr-defined]
-    except Exception as exc:
-        LOGGER.debug("Could not assign sync func to tool %s: %s", getattr(tool, "name", "unknown"), exc)
-
-    return tool
+def _load(path: str):
+    """Open the document if it exists, otherwise start a new one."""
+    return docx.Document(path) if os.path.exists(path) else docx.Document()
 
 
-async def fetch_mcp_word_tools_async() -> List[BaseTool]:
-    """Fetch Word tools from the local Office Word MCP Server asynchronously."""
-    global _cached_word_tools
-    if _cached_word_tools is not None:
-        return _cached_word_tools
-
-    client = get_word_mcp_client()
-    raw_tools = await client.get_tools()
-    tools = [_wrap_sync_tool(t) for t in raw_tools]
-    _cached_word_tools = tools
-    LOGGER.info("Fetched %d Word tools from Office Word MCP Server.", len(tools))
-    return tools
-
-
-def fetch_mcp_word_tools_sync() -> List[BaseTool]:
-    """Fetch Word tools from the local Office Word MCP Server synchronously."""
-    global _cached_word_tools
-    if _cached_word_tools is not None:
-        return _cached_word_tools
-
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            import nest_asyncio
-
-            nest_asyncio.apply()
-            tools = loop.run_until_complete(fetch_mcp_word_tools_async())
-        else:
-            tools = asyncio.run(fetch_mcp_word_tools_async())
-    except Exception as exc:
-        LOGGER.warning("Could not fetch Word tools via event loop, fallback to asyncio.run: %s", exc)
-        try:
-            tools = asyncio.run(fetch_mcp_word_tools_async())
-        except Exception as inner_exc:
-            LOGGER.error("Failed to fetch Word MCP tools: %s", inner_exc)
-            return []
-
-    tools = [_wrap_sync_tool(t) for t in tools]
-    _cached_word_tools = tools
-    return tools
-
-
-from langchain_core.tools import BaseTool, tool
-
-
-# ==============================================================================
-# LOCAL HELPER TOOL: AUTOMATICALLY OPEN WORD DOCUMENT
-# ==============================================================================
-@tool("open_word_document")
-def open_word_document(file_path: str) -> str:
-    """
-    Opens an MS Word (.docx) document on the host desktop in Microsoft Word for the user to view.
-    Always call this after creating or editing a Word document so the user can immediately see the result.
-
-    Args:
-        file_path (str): The file path to the Word (.docx) document to open.
-    """
-    import os
-    import subprocess
-
-    try:
-        abs_path = os.path.abspath(file_path)
-        if not os.path.exists(abs_path):
-            alt_path = os.path.join(os.getcwd(), file_path)
-            if os.path.exists(alt_path):
-                abs_path = alt_path
-            else:
-                return f"Error: Document file '{file_path}' does not exist on disk."
-
-        if hasattr(os, "startfile"):
-            os.startfile(abs_path)
-        else:
-            subprocess.Popen(["start", "", abs_path], shell=True)
-
-        return f"Successfully launched Microsoft Word and opened '{os.path.basename(abs_path)}'."
-    except Exception as exc:
-        return f"Failed to open Word document: {str(exc)}"
-
-
-# ==============================================================================
-# FAST SINGLE-SHOT WORD DOCUMENT CREATOR
-# ==============================================================================
-@tool("create_complete_word_document")
-def create_complete_word_document(file_path: str, title: str, content: str) -> str:
-    """
-    Creates a complete MS Word (.docx) document in a SINGLE step with a formatted title and content,
-    and automatically launches Microsoft Word on the user's desktop.
-    Use this tool whenever you need to write articles, reports, or research summaries into Word.
-
-    Args:
-        file_path (str): The path/name of the .docx file to create (e.g. 'ai_trend.docx').
-        title (str): The main document title.
-        content (str): The full body text (supports markdown headings ##, ###, bullet points, numbers).
-    """
-    import os
-    import subprocess
-
-    try:
-        abs_path = os.path.abspath(file_path)
-        try:
-            import docx
-            doc = docx.Document()
-            doc.add_heading(title, level=0)
-
-            for line in content.split("\n"):
-                line_str = line.strip()
-                if not line_str:
-                    continue
-                if line_str.startswith("### "):
-                    doc.add_heading(line_str[4:], level=2)
-                elif line_str.startswith("## "):
-                    doc.add_heading(line_str[3:], level=1)
-                elif line_str.startswith("# "):
-                    doc.add_heading(line_str[2:], level=1)
-                elif line_str.startswith("- ") or line_str.startswith("• "):
-                    doc.add_paragraph(line_str[2:], style="List Bullet")
-                elif line_str.startswith("1. ") or line_str.startswith("2. ") or line_str.startswith("3. "):
-                    doc.add_paragraph(line_str)
-                else:
-                    doc.add_paragraph(line_str)
-
-            doc.save(abs_path)
-        except ImportError:
-            # Fallback to MCP tools
-            raw_tools = fetch_mcp_word_tools_sync()
-            tool_dict = {t.name: t for t in raw_tools}
-            if "create_document" in tool_dict:
-                tool_dict["create_document"].invoke({"file_path": file_path})
-            if "add_heading" in tool_dict:
-                tool_dict["add_heading"].invoke({"file_path": file_path, "text": title, "level": 1})
-            if "add_paragraph" in tool_dict:
-                tool_dict["add_paragraph"].invoke({"file_path": file_path, "text": content})
-
-        # Automatically open in desktop Word
-        if os.path.exists(abs_path):
-            if hasattr(os, "startfile"):
-                os.startfile(abs_path)
-            else:
-                subprocess.Popen(["start", "", abs_path], shell=True)
-
-        return f"Successfully created complete Word document at '{abs_path}' and opened in Microsoft Word."
-    except Exception as exc:
-        return f"Failed to create Word document: {str(exc)}"
-
-
-# ==============================================================================
-# WORD MCP TOOL FILTERING CONFIGURATION
-# ==============================================================================
-ALLOWED_WORD_TOOLS: Optional[set[str]] = {
-    "create_complete_word_document",
-    "create_document",
-    "add_heading",
-    "add_paragraph",
-    "add_table",
-    "open_word_document",
-}
-
-
-def get_word_tools(filter_essential: bool = True) -> List[BaseTool]:
-    """Return the list of Word MCP tools plus helper tools."""
-    global _cached_word_tools
-    if _cached_word_tools is None:
-        tools = fetch_mcp_word_tools_sync()
+def _launch(path: str) -> None:
+    """Open a file with the default app on Windows, macOS or Linux."""
+    if sys.platform == "win32":
+        os.startfile(path)
     else:
-        tools = list(_cached_word_tools)
-
-    custom_tools = [create_complete_word_document, open_word_document]
-    custom_names = {t.name for t in custom_tools}
-    all_tools = custom_tools + [t for t in tools if t.name not in custom_names]
-
-    if filter_essential and ALLOWED_WORD_TOOLS is not None:
-        filtered = [t for t in all_tools if t.name in ALLOWED_WORD_TOOLS]
-        return filtered if filtered else all_tools
-    return all_tools
+        opener = "open" if sys.platform == "darwin" else "xdg-open"
+        subprocess.Popen([opener, path])
 
 
-# Initial fetch / fallback
-try:
-    word_tools: List[BaseTool] = get_word_tools()
-except Exception as e:
-    LOGGER.warning("Initial sync fetch of Word MCP tools deferred: %s", e)
-    word_tools = [create_complete_word_document, open_word_document]
+@tool
+def create_document(file_path: str) -> str:
+    """Create a new empty Word (.docx) document at file_path."""
+    try:
+        path = _prepare_path(file_path)
+        docx.Document().save(path)
+        return f"Created '{path}'."
+    except Exception as exc:
+        return f"Failed to create document: {exc}"
+
+
+@tool
+def add_heading(file_path: str, text: str, level: int = 1) -> str:
+    """Add a heading (level 1-9) to a Word (.docx) document. Creates the file if missing."""
+    try:
+        path = _prepare_path(file_path)
+        doc = _load(path)
+        doc.add_heading(text, level=min(max(level, 1), 9))
+        doc.save(path)
+        return f"Added heading '{text}' to '{path}'."
+    except Exception as exc:
+        return f"Failed to add heading: {exc}"
+
+
+@tool
+def add_paragraph(file_path: str, text: str) -> str:
+    """Add a body paragraph to a Word (.docx) document. Creates the file if missing."""
+    try:
+        path = _prepare_path(file_path)
+        doc = _load(path)
+        doc.add_paragraph(text)
+        doc.save(path)
+        return f"Added paragraph to '{path}'."
+    except Exception as exc:
+        return f"Failed to add paragraph: {exc}"
+
+
+@tool
+def add_table(file_path: str, rows: int, cols: int, data: list[list[str]] | None = None) -> str:
+    """Add a table (rows x cols) to a Word (.docx) document, optionally filled from a 2D list."""
+    try:
+        path = _prepare_path(file_path)
+        doc = _load(path)
+        table = doc.add_table(rows=rows, cols=cols)
+        for r, row in enumerate(data or []):
+            for c, value in enumerate(row):
+                if r < rows and c < cols:
+                    table.cell(r, c).text = str(value)
+        doc.save(path)
+        return f"Added {rows}x{cols} table to '{path}'."
+    except Exception as exc:
+        return f"Failed to add table: {exc}"
+
+
+@tool
+def open_word_document(file_path: str) -> str:
+    """Open a Word (.docx) document on the user's desktop. Call this after creating or editing a document."""
+    try:
+        path = _workspace_docx(file_path)
+        if not os.path.exists(path):
+            return f"Error: '{file_path}' does not exist."
+        _launch(path)
+        return f"Opened '{os.path.basename(path)}'."
+    except Exception as exc:
+        return f"Failed to open document: {exc}"
+
+
+@tool
+def create_complete_word_document(file_path: str, title: str, content: str) -> str:
+    """Create a full Word (.docx) document in one step and open it.
+
+    Use this for articles, reports and research summaries. `content` can use
+    markdown-style '#', '##', '###' headings and '- ' bullets.
+    """
+    try:
+        path = _prepare_path(file_path)
+        doc = docx.Document()
+        doc.add_heading(title, level=0)
+
+        for line in content.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("### "):
+                doc.add_heading(line[4:], level=2)
+            elif line.startswith(("## ", "# ")):
+                doc.add_heading(line.lstrip("#").strip(), level=1)
+            elif line.startswith(("- ", "• ")):
+                doc.add_paragraph(line[2:], style="List Bullet")
+            else:
+                doc.add_paragraph(line)
+
+        doc.save(path)
+        _launch(path)
+        return f"Created and opened '{path}'."
+    except Exception as exc:
+        return f"Failed to create Word document: {exc}"
+
+
+word_tools = [
+    create_complete_word_document,
+    create_document,
+    add_heading,
+    add_paragraph,
+    add_table,
+    open_word_document,
+]
+
+def get_word_tools():
+    return word_tools

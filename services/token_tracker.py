@@ -4,7 +4,7 @@ Captures real-time, exact prompt tokens, completion tokens, and per-node breakdo
 from LLM invocations during LangGraph execution turns.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 
@@ -84,3 +84,11 @@ class LangSmithTokenTracker(BaseCallbackHandler):
             "node_breakdown": dict(self.node_breakdown),
             "source": "langsmith",
         }
+
+
+def build_run_config(user_id: Any, tracker: "LangSmithTokenTracker") -> Dict[str, Any]:
+    """LangGraph run config: token tracker callback plus the user's conversation thread."""
+    return {
+        "callbacks": [tracker],
+        "configurable": {"thread_id": str(user_id)},
+    }

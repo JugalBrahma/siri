@@ -78,7 +78,6 @@ PINECONE_NAMESPACE = "semantic"
 def ensure_namespace_exists(
     index,
     namespace: str = PINECONE_NAMESPACE,
-    dimension: int = PINECONE_DIMENSION,
 ) -> bool:
     """
     Check Pinecone index and report namespace status.

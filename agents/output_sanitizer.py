@@ -13,6 +13,8 @@ SECRET_PATTERNS = [
     r"AIza[0-9A-Za-z-_]{35}",               # Google API Key
     r"bearer\s+[a-zA-Z0-9\-\._~\+\/]+=*",   # Bearer Token
     r"xox[bpar]-[a-zA-Z0-9]{10,}",          # Slack Token
+    r"tvly-[a-zA-Z0-9_\-]{10,}",            # Tavily API Key
+    r"tavilyApiKey=[^&\s\"']+",             # Tavily key inside an MCP URL
 ]
 
 def redact_secrets(text: str) -> str:

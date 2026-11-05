@@ -1,14 +1,6 @@
 # agents/guardrail_agent.py
-import asyncio
 import re
 
-try:
-    import nest_asyncio
-    nest_asyncio.apply()
-except ImportError:
-    pass
-
-from langgraph.graph import END
 from langgraph.types import Command
 from langchain_core.messages import AIMessage
 from typing import Literal
@@ -16,18 +8,21 @@ from state.message_state import State
 # pyrefly: ignore [missing-import]
 from nemoguardrails import RailsConfig, LLMRails
 from models.models import guardrail_llm
+from services.text import message_text
 
 REFUSAL_FALLBACK = (
-    "I'm sorry, but I can't process that request. "
-    "It appears to violate my safety guidelines."
+    "I can't do that. I am only designed to assist with specific tasks and automation."
 )
 
-# Patterns that are overwhelmingly safe — skip the full NeMo pipeline.
-# Kept conservative: only well-known benign intents.
+# Strict rule: Pure greetings, gratitude, or pleasantries with no task attached are blocked
+_CHITCHAT_GRATITUDE_PATTERN = re.compile(
+    r"^(?:hello|hi|hey|thanks|thank you|good morning|good evening|good afternoon|how are you|howdy|appreciate it)\b[\s!.?]*$",
+    re.IGNORECASE,
+)
+
+# Fast-path safe pattern ONLY for unambiguous task queries (e.g. weather)
 _SAFE_PATTERN = re.compile(
-    r"(?:what(?:'s| is)|how(?:'s| is)|tell me|show me|get|check|find|give me)?\s*"
-    r"(?:the\s+)?(?:weather|forecast|temperature|time|date|hello|hi|hey|"
-    r"thanks|thank you|good morning|good evening)",
+    r"^(?:what(?:'s| is)|how(?:'s| is)|tell me|show me|get|check|find)?\s*(?:the\s+)?(?:weather|forecast|temperature|time|date)\b",
     re.IGNORECASE,
 )
 
@@ -40,29 +35,33 @@ def guardrail_agent(state: State) -> Command[Literal["supervisor", "__end__"]]:
     if not last_msg:
         return Command(goto="supervisor")
 
-    raw_content = last_msg.content
-    if isinstance(raw_content, str):
-        raw_input = raw_content
-    elif isinstance(raw_content, list):
-        raw_input = " ".join(
-            item if isinstance(item, str) else str(item.get("text", "")) if isinstance(item, dict) else str(item)
-            for item in raw_content
-        )
-    else:
-        raw_input = str(raw_content)
+    raw_input = message_text(last_msg.content)
 
     raw_input = raw_input.strip()
     if not raw_input:
         return Command(goto="supervisor")
 
-    # Fast-path: skip NeMo for obviously safe, short inputs
+    # Strict refusal for pure greetings, gratitude, or casual pleasantries
+    if _CHITCHAT_GRATITUDE_PATTERN.match(raw_input):
+        return Command(
+            update={
+                "messages": [
+                    AIMessage(
+                        content=REFUSAL_FALLBACK,
+                        name="guardrail",
+                    )
+                ]
+            },
+            goto="__end__",
+        )
+
+    # Fast-path: skip NeMo for obviously safe, short task queries
     if _SAFE_PATTERN.search(raw_input) and len(raw_input) < 200:
         return Command(goto="supervisor")
 
     try:
-        res = rails.generate(messages=[{"role": "user", "content": raw_input}])
+        rails.generate(messages=[{"role": "user", "content": raw_input}])
         explain = rails.explain()
-        bot_output = res.get("content", "").strip() if isinstance(res, dict) else str(res).strip()
 
         # Check if NeMo Guardrails triggered an input rail block
         triggered = getattr(explain, "triggered_input_rails", None)
@@ -79,12 +78,12 @@ def guardrail_agent(state: State) -> Command[Literal["supervisor", "__end__"]]:
                 update={
                     "messages": [
                         AIMessage(
-                            content=bot_output or REFUSAL_FALLBACK,
+                            content=REFUSAL_FALLBACK,
                             name="guardrail",
                         )
                     ]
                 },
-                goto=END,
+                goto="__end__",
             )
     except Exception:
         # Fallback to supervisor if guardrail fails unexpectedly

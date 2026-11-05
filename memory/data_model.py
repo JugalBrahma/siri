@@ -59,10 +59,6 @@ class SemanticFact:
         # Audit trail for fact evolution.
         self.evolution_log = evolution_log if evolution_log is not None else []
 
-    def is_reliable(self, threshold: float = 0.7) -> bool:
-        """Return True if this fact meets the confidence threshold for injection."""
-        return self.confidence >= threshold
-
     def strengthen(self, episode_id: str):
         old_confidence = self.confidence
         self.confidence = self.confidence + 0.1

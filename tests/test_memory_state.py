@@ -10,23 +10,41 @@ import unittest
 
 
 def _install_langgraph_stub() -> None:
-    """Allow state-contract tests to run even in a minimal Python environment."""
-    if "langgraph.graph" in sys.modules:
-        return
+    """Allow state-contract tests to run even in a minimal Python environment.
 
-    langgraph = types.ModuleType("langgraph")
+    The stub is only used when the real langgraph package is not installed;
+    otherwise it would hide the real package and break its submodules.
+    """
+    try:
+        import langgraph.graph  # noqa: F401
+        import langgraph.checkpoint.memory  # noqa: F401
+        return
+    except ImportError:
+        pass
+
+    langgraph_pkg = types.ModuleType("langgraph")
     graph = types.ModuleType("langgraph.graph")
+    checkpoint = types.ModuleType("langgraph.checkpoint")
+    checkpoint_memory = types.ModuleType("langgraph.checkpoint.memory")
 
     class FakeStateGraph:
         def __init__(self, *_args, **_kwargs):
             pass
 
+    class FakeMemorySaver:
+        pass
+
     graph.MessagesState = dict
     graph.StateGraph = FakeStateGraph
     graph.END = "END"
-    langgraph.graph = graph
-    sys.modules["langgraph"] = langgraph
+    checkpoint_memory.MemorySaver = FakeMemorySaver
+    langgraph_pkg.graph = graph
+    langgraph_pkg.checkpoint = checkpoint
+    checkpoint.memory = checkpoint_memory
+    sys.modules["langgraph"] = langgraph_pkg
     sys.modules["langgraph.graph"] = graph
+    sys.modules["langgraph.checkpoint"] = checkpoint
+    sys.modules["langgraph.checkpoint.memory"] = checkpoint_memory
 
 
 _install_langgraph_stub()

@@ -9,6 +9,36 @@ load_dotenv(override=True)
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 
 
+BASE_URL = "https://api.openweathermap.org/data/2.5"
+
+
+class _WeatherInputError(Exception):
+    """A problem with the tool input or config; its message goes straight to the model."""
+
+
+def _fetch(endpoint: str, location: Optional[str], lat: Optional[float], lon: Optional[float],
+           example_city: str, **extra) -> dict:
+    """Call an OpenWeather endpoint by city name or coordinates and return the JSON."""
+    api_key = os.getenv("OPENWEATHER_API_KEY") or OPENWEATHER_API_KEY
+    if not api_key:
+        raise _WeatherInputError("Error: OPENWEATHER_API_KEY is not configured in .env")
+
+    params = {"units": "metric", "appid": api_key, **extra}  # metric = Celsius
+    if location and location.strip():
+        params["q"] = location.strip()
+    elif lat is not None and lon is not None:
+        params["lat"] = lat
+        params["lon"] = lon
+    else:
+        raise _WeatherInputError(
+            f"Error: Please specify a city name (e.g. '{example_city}') or coordinates (lat, lon)."
+        )
+
+    response = requests.get(f"{BASE_URL}/{endpoint}", params=params, timeout=10)
+    response.raise_for_status()
+    return response.json()
+
+
 @tool
 def get_current_weather(
     location: Optional[str] = None,
@@ -24,28 +54,8 @@ def get_current_weather(
         lat (float, optional): Latitude coordinate if city name is not provided.
         lon (float, optional): Longitude coordinate if city name is not provided.
     """
-    api_key = os.getenv("OPENWEATHER_API_KEY") or OPENWEATHER_API_KEY
-    if not api_key:
-        return "Error: OPENWEATHER_API_KEY is not configured in .env"
-
-    url = "https://api.openweathermap.org/data/2.5/weather"
-    params = {
-        "units": "metric",  # Defaults to Celsius
-        "appid": api_key,
-    }
-
-    if location and location.strip():
-        params["q"] = location.strip()
-    elif lat is not None and lon is not None:
-        params["lat"] = lat
-        params["lon"] = lon
-    else:
-        return "Error: Please specify a city name (e.g. 'San Francisco') or coordinates (lat, lon)."
-
     try:
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
+        data = _fetch("weather", location, lat, lon, example_city="San Francisco")
 
         city_name = data.get("name", location or "Requested Location")
         weather_info = data.get("weather", [{}])[0]
@@ -57,6 +67,8 @@ def get_current_weather(
         wind = data.get("wind", {}).get("speed", "N/A")
 
         return f"Weather in {city_name}: {temp}°C (feels like {feels_like}°C), {desc}, Humidity: {humidity}%, Wind: {wind} m/s."
+    except _WeatherInputError as e:
+        return str(e)
     except Exception as e:
         return f"Failed to fetch weather data: {str(e)}"
 
@@ -79,29 +91,9 @@ def get_weather_forecast(
         lat (float, optional): Latitude coordinate if city name is not provided.
         lon (float, optional): Longitude coordinate if city name is not provided.
     """
-    api_key = os.getenv("OPENWEATHER_API_KEY") or OPENWEATHER_API_KEY
-    if not api_key:
-        return "Error: OPENWEATHER_API_KEY is not configured in .env"
-
-    url = "https://api.openweathermap.org/data/2.5/forecast"
-    params = {
-        "units": "metric",
-        "appid": api_key,
-        "cnt": 5,  # 5 entries ≈ 15 hours of forecast data
-    }
-
-    if location and location.strip():
-        params["q"] = location.strip()
-    elif lat is not None and lon is not None:
-        params["lat"] = lat
-        params["lon"] = lon
-    else:
-        return "Error: Please specify a city name (e.g. 'Tokyo') or coordinates (lat, lon)."
-
     try:
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
+        # cnt=5 entries ≈ 15 hours of forecast data
+        data = _fetch("forecast", location, lat, lon, example_city="Tokyo", cnt=5)
 
         city_name = data.get("city", {}).get("name", location or "Requested Location")
         forecasts = data.get("list", [])
@@ -118,6 +110,8 @@ def get_weather_forecast(
             lines.append(f"  {dt_txt}: {temp}°C, {desc}, Humidity: {humidity}%")
 
         return "\n".join(lines)
+    except _WeatherInputError as e:
+        return str(e)
     except Exception as e:
         return f"Failed to fetch forecast data: {str(e)}"
 

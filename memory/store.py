@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 SIMILARITY_DUPLICATE = 0.92   # same fact restated -> strengthen, don't add

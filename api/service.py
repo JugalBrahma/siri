@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import logging
 import os
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from agents.actionagent import action_agent
@@ -18,7 +18,7 @@ from graph_builder.graph import GraphBuilder
 from memory.data_model import FactCategory, SemanticFact
 from memory.observability import MemoryObserver
 from memory.runtime import create_configured_memory_store
-from services.token_tracker import LangSmithTokenTracker
+from services.token_tracker import LangSmithTokenTracker, build_run_config
 import config.config
 
 LOGGER = logging.getLogger("siri.api.service")
@@ -119,10 +119,7 @@ class SiriAgentService:
         initial_state = self.builder.create_turn_state(messages)
 
         tracker = LangSmithTokenTracker()
-        config = {
-            "callbacks": [tracker],
-            "configurable": {"thread_id": str(active_user_id)},
-        }
+        config = build_run_config(active_user_id, tracker)
 
         hop_count = 0
         final_state = initial_state
@@ -188,10 +185,7 @@ class SiriAgentService:
 
         active_user_id = user_id or self.default_user_id
         tracker = LangSmithTokenTracker()
-        config = {
-            "callbacks": [tracker],
-            "configurable": {"thread_id": str(active_user_id)},
-        }
+        config = build_run_config(active_user_id, tracker)
 
         from langgraph.types import Command
         resume_command = Command(resume=human_response)

@@ -3,7 +3,6 @@
 import unittest
 from fastapi.testclient import TestClient
 from api.app import create_app
-from api.schemas import ChatRequest
 from api.service import SiriAgentService
 
 

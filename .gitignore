@@ -29,3 +29,7 @@ env/
 # IDE / Editor Settings
 .vscode/
 .idea/
+
+# Ignore all markdown docs except the README
+*.md
+!README.md

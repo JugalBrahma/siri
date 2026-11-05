@@ -1,10 +1,7 @@
 import os
 import warnings
 from dotenv import load_dotenv
-from langchain_groq import ChatGroq
 from langchain_openai import ChatOpenAI
-# pyrefly: ignore [missing-import]
-from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
 warnings.filterwarnings("ignore", category=UserWarning, module="langchain_nvidia_ai_endpoints")
 
@@ -17,13 +14,13 @@ load_dotenv(override=True)
 # ==============================================================================
 # model = "gpt-4o-mini"  # Fast, economical, high TPM limit
 # model = "gpt-4o"       # Flagship reasoning & multi-step execution
-model = "gpt-5.6-luna"
-llm = ChatOpenAI(
-    model=model,
-    api_key=os.getenv("OPENAI_API_KEY"),
-    reasoning_effort="none",
-    temperature=0,
-)
+# model = "gpt-5.6-luna"
+# llm = ChatOpenAI(
+#     model=model,
+#     api_key=os.getenv("OPENAI_API_KEY"),
+#     reasoning_effort="none",
+#     temperature=0,
+# )
 
 # ==============================================================================
 # Guardrail LLM — lightweight model for NeMo safety rail checks.
@@ -37,19 +34,40 @@ llm = ChatOpenAI(
 # )
 
 # ==============================================================================
-# 2. GROQ (Ultra-Fast Inference)
+# 2. OPENROUTER (DeepSeek & Multi-Provider Gateway)
 # ==============================================================================
-model = "qwen/qwen3.6-27b"
+# openrouter_model = "deepseek/deepseek-chat"  # DeepSeek V3 (Chat)
+# openrouter_model = "deepseek/deepseek-r1"    # DeepSeek R1 (Reasoning)
+# openrouter_model = "deepseek/deepseek-chat:free"
+openrouter_model = "deepseek/deepseek-v4.1-flash"
+guardrail_llm = ChatOpenAI(
+    model=openrouter_model,
+    api_key=os.getenv("OPENROUTER_API_KEY"),
+    base_url="https://openrouter.ai/api/v1",
+    temperature=0,
+)
+# To use OpenRouter DeepSeek as the main LLM as well, uncomment below:
+llm = ChatOpenAI(
+    model=openrouter_model,
+    api_key=os.getenv("OPENROUTER_API_KEY"),
+    base_url="https://openrouter.ai/api/v1",
+    temperature=0,
+)
+
+# ==============================================================================
+# 3. GROQ (Ultra-Fast Inference) [Disabled]
+# ==============================================================================
+# model = "qwen/qwen3.6-27b"
 # model = "llama-3.3-70b-versatile"  # High capacity (30k+ TPM)
 # model = "llama-3.1-8b-instant"
 # llm = ChatGroq(
 #     model=model,
 #     temperature=0,
 # )
-guardrail_llm = ChatGroq(
-    model=model,
-    temperature=0,
- )
+# guardrail_llm = ChatGroq(
+#     model=model,
+#     temperature=0,
+# )
 # ==============================================================================
 # 3. NVIDIA NIM (Generous Context & Cloud Endpoints)
 # ==============================================================================

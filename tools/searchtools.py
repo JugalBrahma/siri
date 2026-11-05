@@ -1,121 +1,108 @@
 import asyncio
+import concurrent.futures
+import json
 import logging
 import os
-import sys
-from typing import Dict, List, Optional
-from langchain_core.tools import BaseTool, tool
-from langchain_mcp_adapters.client import Connection, MultiServerMCPClient
 
 from dotenv import load_dotenv
+from langchain_core.tools import tool
+from langchain_mcp_adapters.client import MultiServerMCPClient
+
+from agents.output_sanitizer import redact_secrets
 
 load_dotenv()
 
-LOGGER = logging.getLogger("siri.tools.searchtools")
+log = logging.getLogger("siri.tools.searchtools")
+
+MAX_CHARS = 2500       # cap for raw/unparsed output
+SNIPPET_CHARS = 400    # cap per search result
+TOP_RESULTS = 3
+
+_client = None
 
 
-def get_mcp_server_connections() -> dict[str, Connection]:
-    """Build connection configuration for Tavily's remote hosted MCP server."""
-    api_key = os.getenv("TAVILY_API_KEY", "")
-    return {
-        "tavily_server": {
-            "url": f"https://mcp.tavily.com/mcp/?tavilyApiKey={api_key}",
-            "transport": "streamable_http",
-        }
-    }
+def get_client() -> MultiServerMCPClient:
+    """Create the Tavily MCP client once and reuse it."""
+    global _client
+    if _client is None:
+        api_key = os.getenv("TAVILY_API_KEY") or os.getenv("Tavily_Api_key", "")
+        _client = MultiServerMCPClient({
+            "tavily": {
+                "url": f"https://mcp.tavily.com/mcp/?tavilyApiKey={api_key}",
+                "transport": "streamable_http",
+            }
+        })
+    return _client
 
 
-MCP_SERVER_CONNECTIONS: dict[str, Connection] = get_mcp_server_connections()
-
-_mcp_client: Optional[MultiServerMCPClient] = None
-
-
-def get_mcp_client() -> MultiServerMCPClient:
-    """Get or create the MultiServerMCPClient instance."""
-    global _mcp_client
-    if _mcp_client is None:
-        _mcp_client = MultiServerMCPClient(get_mcp_server_connections())
-    return _mcp_client
-
-
-async def fetch_mcp_search_tools_async() -> List[BaseTool]:
-    """Fetch search tools from the Tavily MCP Server asynchronously."""
-    client = get_mcp_client()
-    return await client.get_tools()
-
-
-def fetch_mcp_search_tools_sync() -> List[BaseTool]:
-    """Fetch search tools from the Tavily MCP Server synchronously."""
+def run_sync(coro):
+    """Run a coroutine from sync code, even if an event loop is already running."""
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            import nest_asyncio
-            nest_asyncio.apply()
-            return loop.run_until_complete(fetch_mcp_search_tools_async())
-        return asyncio.run(fetch_mcp_search_tools_async())
-    except Exception as exc:
-        LOGGER.warning("Could not fetch tools via event loop, fallback to asyncio.run: %s", exc)
-        return asyncio.run(fetch_mcp_search_tools_async())
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    # A loop is already running in this thread, so use a separate thread.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
 
 
-def _format_search_results(raw_result: Any) -> str:
-    """Format and compact search results to prevent massive token inflation."""
-    import json
-    if isinstance(raw_result, str):
+def pick_search_tool(tools):
+    """Prefer 'tavily_search', then any other search tool, then whatever is first."""
+    for t in tools:
+        if t.name == "tavily_search":
+            return t
+    for t in tools:
+        name = t.name.lower()
+        if "search" in name and "research" not in name:
+            return t
+    return tools[0] if tools else None
+
+
+def format_results(raw) -> str:
+    """Trim search output down to a few short results so we don't burn tokens."""
+    # MCP returns [{'type': 'text', 'text': '...'}]
+    if isinstance(raw, list) and raw and isinstance(raw[0], dict) and "text" in raw[0]:
+        raw = raw[0]["text"]
+
+    if isinstance(raw, str):
         try:
-            parsed = json.loads(raw_result)
-            raw_result = parsed
-        except Exception:
-            return raw_result[:2500] if len(raw_result) > 2500 else raw_result
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return raw[:MAX_CHARS]
 
-    if isinstance(raw_result, dict):
-        results = raw_result.get("results", [])
-    elif isinstance(raw_result, list):
-        results = raw_result
-    else:
-        return str(raw_result)[:2500]
+    results = raw.get("results", []) if isinstance(raw, dict) else raw
+    if not isinstance(results, list):
+        return str(raw)[:MAX_CHARS]
 
-    formatted = []
-    for item in results[:3]:  # Top 3 high-relevance results
-        if isinstance(item, dict):
-            title = item.get("title", "No Title")
-            content = item.get("content", item.get("snippet", ""))[:400]
-            url = item.get("url", "")
-            formatted.append(f"• **{title}**\n  {content}\n  Source: {url}")
-        else:
-            formatted.append(str(item)[:400])
-    return "\n\n".join(formatted) if formatted else str(raw_result)[:2500]
+    lines = []
+    for item in results[:TOP_RESULTS]:
+        if not isinstance(item, dict):
+            lines.append(str(item)[:SNIPPET_CHARS])
+            continue
+        title = item.get("title", "No title")
+        snippet = (item.get("content") or item.get("snippet") or "")[:SNIPPET_CHARS]
+        url = item.get("url", "")
+        lines.append(f"• **{title}**\n  {snippet}\n  Source: {url}")
+
+    return "\n\n".join(lines) or str(raw)[:MAX_CHARS]
 
 
 @tool("tavily_search")
 def search_tool(query: str, max_results: int = 3) -> str:
-    """Search the web using Tavily Search API for up-to-date facts, information, and research articles."""
+    """Search the web with Tavily for up-to-date facts and articles."""
+    async def search():
+        tools = await get_client().get_tools()
+        tool_to_use = pick_search_tool(tools)
+        if tool_to_use is None:
+            return "Error: the MCP server returned no search tools."
+        raw = await tool_to_use.ainvoke({"query": query, "max_results": max_results})
+        return format_results(raw)
+
     try:
-        client = get_mcp_client()
-
-        async def _run():
-            tools = await client.get_tools()
-            for t in tools:
-                if "search" in t.name.lower():
-                    raw = await t.ainvoke({"query": query, "max_results": max_results})
-                    return _format_search_results(raw)
-            if tools:
-                raw = await tools[0].ainvoke({"query": query, "max_results": max_results})
-                return _format_search_results(raw)
-            return "Error: No search tools returned from MCP server."
-
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import nest_asyncio
-                nest_asyncio.apply()
-                return loop.run_until_complete(_run())
-            return asyncio.run(_run())
-        except Exception:
-            return asyncio.run(_run())
+        return run_sync(search())
     except Exception as exc:
-        LOGGER.error("MCP tool execution failed: %s", exc)
-        return f"Error executing search tool via MCP: {str(exc)}"
-
-
-# Exported tools list
-search_tools: List[BaseTool] = [search_tool]
+        # The MCP URL carries the API key, so keep it out of logs and the LLM.
+        message = redact_secrets(str(exc))
+        log.error("Search failed: %s", message)
+        return f"Error running search: {message}"

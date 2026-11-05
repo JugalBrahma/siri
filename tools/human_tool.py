@@ -1,4 +1,4 @@
-from typing import Any, Mapping
+from typing import Mapping
 from langchain_core.tools import tool
 from langgraph.types import interrupt
 

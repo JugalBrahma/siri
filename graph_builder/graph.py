@@ -41,6 +41,7 @@ class GraphBuilder:
         
 
     def build(self):
+        # pyrefly: ignore[bad-specialization]
         graph = StateGraph(State)
         graph.add_node("guardrail", self.guardrail)
         graph.add_node("supervisor", self.supervisor)
@@ -60,6 +61,14 @@ class GraphBuilder:
         self.graph = graph.compile(checkpointer=self.checkpointer)
         return self.graph
     
+    def _ensure_graph(self):
+        """Compile the graph on first use and return it."""
+        if self.graph is None:
+            self.graph = self.build()
+            if self.graph is None:
+                raise RuntimeError("Failed to build the graph: self.build() returned None.")
+        return self.graph
+
     def _fetch_semantic_memory(self) -> str:
         """Fetch a single durable-memory snapshot for the next graph turn."""
         if self.memory_store is None:
@@ -106,13 +115,10 @@ class GraphBuilder:
         Returns:
             Final state with results
         """
-        if self.graph is None:
-            self.graph = self.build()
-            if self.graph is None:
-                raise RuntimeError("Failed to build the graph: self.build() returned None.")
+        graph = self._ensure_graph()
         
         turn_config: RunnableConfig = config or {"configurable": {"thread_id": "default_thread"}}
-        return self.graph.invoke(self.create_turn_state(messages), config=turn_config)
+        return graph.invoke(self.create_turn_state(messages), config=turn_config)
 
     def stream(
         self,
@@ -130,18 +136,13 @@ class GraphBuilder:
         Yields:
             State dicts as nodes in the graph execute.
         """
-        if self.graph is None:
-            self.graph = self.build()
-            if self.graph is None:
-                raise RuntimeError("Failed to build the graph: self.build() returned None.")
+        graph = self._ensure_graph()
         
         turn_config: RunnableConfig = config or {"configurable": {"thread_id": "default_thread"}}
-        return self.graph.stream(input_data, config=turn_config, stream_mode=stream_mode)
+        return graph.stream(input_data, config=turn_config, stream_mode=stream_mode)
 
     def get_state(self, config: Optional[RunnableConfig] = None):
         """Get the current graph state for the given configuration."""
-        if self.graph is None:
-            self.graph = self.build()
-            if self.graph is None:
-                raise RuntimeError("Failed to build the graph: self.build() returned None.")
-        return self.graph.get_state(config)
+        graph = self._ensure_graph()
+        # pyrefly: ignore[bad-argument-type]
+        return graph.get_state(config)

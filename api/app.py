@@ -6,7 +6,6 @@ import os
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 import config.config  # Initialize tracing and environment config
 from api.routes import router
@@ -71,7 +70,7 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    host = os.getenv("HOST", "0.0.0.0")
+    host = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "8000"))
     log_level = os.getenv("LOG_LEVEL", "info").lower()
     uvicorn.run("api.app:app", host=host, port=port, reload=True, log_level=log_level)

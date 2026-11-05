@@ -1,21 +1,18 @@
 import asyncio
 import json
-from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
 from api.schemas import (
     AddFactRequest,
-    ChatMessage,
     ChatRequest,
     ChatResponse,
     HealthResponse,
-    InterruptInfo,
     MemoryResponse,
     ResumeChatRequest,
 )
 from api.service import SiriAgentService
-from services.token_tracker import LangSmithTokenTracker
+from services.token_tracker import LangSmithTokenTracker, build_run_config
 
 router = APIRouter(tags=["Siri Agent API"])
 
@@ -108,10 +105,7 @@ async def chat_stream_endpoint(
 
             initial_state = service.builder.create_turn_state(messages)
             tracker = LangSmithTokenTracker()
-            config = {
-                "callbacks": [tracker],
-                "configurable": {"thread_id": str(active_user_id)},
-            }
+            config = build_run_config(active_user_id, tracker)
 
             hop_count = 0
             final_state = initial_state
@@ -219,10 +213,7 @@ async def chat_resume_stream_endpoint(
             resume_command = Command(resume=human_response)
 
             tracker = LangSmithTokenTracker()
-            config = {
-                "callbacks": [tracker],
-                "configurable": {"thread_id": str(active_user_id)},
-            }
+            config = build_run_config(active_user_id, tracker)
 
             hop_count = 0
             final_state = {}

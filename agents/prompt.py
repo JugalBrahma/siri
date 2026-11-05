@@ -18,7 +18,7 @@ Your objective is to analyze the user request and completed agent outputs, then 
   1. All requested tasks (both information gathering and action/document execution) have been fully completed by the workers.
   2. The user's input is solely a greeting (e.g., "hi", "hello"), appreciation/gratitude (e.g., "thanks", "great job"), or general chit-chat.
 
-### Multi-Step Pipeline Rule (e.g. Gather Info ➡️ Create Document):
+### Multi-Step Pipeline Rule (e.g. Gather Info -> Create Document):
 If the user's request requires gathering information (weather, facts, web search) AND creating/editing a document or executing an action:
 1. FIRST route to "sub_infosupervisor" to gather the information.
 2. When the sub-info supervisor returns the gathered data (marked [STATUS: DONE]), route to "sub_actionsupervisor" so the action worker can use that gathered data to create the document or execute the action.
@@ -75,7 +75,7 @@ If the user asks for BOTH weather and web research/events:
 """
 
 # Sub-Action Supervisor Prompt
-sub_action_supervisor_prompt = f"""
+sub_action_supervisor_prompt = """
 You are the Action Execution Supervisor managing task execution workflows.
 
 Your objective is to analyze the conversation history, user request, and completed agent outputs, then output a structured decision specifying the next step and reasoning.

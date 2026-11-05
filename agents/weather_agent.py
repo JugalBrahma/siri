@@ -8,9 +8,10 @@ from state.message_state import (
     semantic_memory_prompt,
 )
 from models.models import llm
+from services.text import message_text
 from tools.weather import tools as openweather_tools
 from tools.human_tool import ask_human
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
 weather_tools = list(openweather_tools) + [ask_human]
 
@@ -71,17 +72,7 @@ def weather_agent(state: State) -> Command[Literal["sub_infosupervisor"]]:
         # No tool calls — LLM answered directly (e.g., asked a clarification)
         final_output = response.content
 
-    output_text = (
-        final_output
-        if isinstance(final_output, str)
-        else "".join(
-            part if isinstance(part, str) else str(part.get("text", part))
-            if isinstance(part, dict) else str(part)
-            for part in final_output
-        )
-        if isinstance(final_output, list)
-        else str(final_output)
-    )
+    output_text = message_text(final_output, sep="")
 
     info_state = record_agent_output(
         get_supervisor_state(state, "info_supervisor"),

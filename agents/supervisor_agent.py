@@ -1,5 +1,4 @@
 import re
-from langgraph.graph import END
 from langgraph.types import Command
 from typing import Literal
 from langchain_core.messages import AIMessage
@@ -58,32 +57,40 @@ def _extract_user_text(state: State) -> str:
     return ""
 
 
-def _fast_path_main(user_text: str) -> str | None:
-    """Return a fast-path destination or None to fall through to LLM routing."""
+def _pick_by_keywords(user_text: str, first: tuple, second: tuple) -> str | None:
+    """Return the destination whose keyword pattern alone matches, else None.
+
+    `first` and `second` are (pattern, destination) pairs. If both or neither
+    match, the request is ambiguous and the caller falls back to LLM routing.
+    """
     if not user_text:
         return None
-    has_info = bool(_INFO_KEYWORDS.search(user_text))
-    has_action = bool(_ACTION_KEYWORDS.search(user_text))
-    if has_info and not has_action:
-        return "sub_infosupervisor"
-    if has_action and not has_info:
-        return "sub_actionsupervisor"
-    # Ambiguous or mixed → let the LLM decide
+    (first_pattern, first_dest), (second_pattern, second_dest) = first, second
+    has_first = bool(first_pattern.search(user_text))
+    has_second = bool(second_pattern.search(user_text))
+    if has_first and not has_second:
+        return first_dest
+    if has_second and not has_first:
+        return second_dest
     return None
+
+
+def _fast_path_main(user_text: str) -> str | None:
+    """Return a fast-path destination or None to fall through to LLM routing."""
+    return _pick_by_keywords(
+        user_text,
+        (_INFO_KEYWORDS, "sub_infosupervisor"),
+        (_ACTION_KEYWORDS, "sub_actionsupervisor"),
+    )
 
 
 def _fast_path_info(user_text: str) -> str | None:
     """Return a fast-path worker destination or None to fall through to LLM routing."""
-    if not user_text:
-        return None
-    has_weather = bool(_WEATHER_KEYWORDS.search(user_text))
-    has_research = bool(_RESEARCH_KEYWORDS.search(user_text))
-    if has_weather and not has_research:
-        return "weather"
-    if has_research and not has_weather:
-        return "researcher"
-    # Both or neither → let the LLM decide
-    return None
+    return _pick_by_keywords(
+        user_text,
+        (_WEATHER_KEYWORDS, "weather"),
+        (_RESEARCH_KEYWORDS, "researcher"),
+    )
 
 
 def format_agent_outputs_prompt(agent_outputs: dict[str, str]) -> str:
@@ -95,6 +102,39 @@ def format_agent_outputs_prompt(agent_outputs: dict[str, str]) -> str:
         lines.append(f"- **{agent_name}** [STATUS: DONE]:\n{output.strip()}")
     lines.append("\n**CRITICAL RULE**: NEVER route to any agent or sub-supervisor marked [STATUS: DONE] above.")
     return "\n".join(lines)
+
+
+def _llm_decide(base_prompt: str, scope: dict, user_text: str, schema, label: str) -> tuple:
+    """Ask the LLM for a routing decision and return (next, reasoning).
+
+    The system prompt is the supervisor's own prompt plus the shared semantic
+    memory and the outputs already completed in this scope.
+    """
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                base_prompt
+                + semantic_memory_prompt(scope["semantic_memory"])
+                + format_agent_outputs_prompt(scope["agent_outputs"])
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"User Request: {user_text}",
+        },
+    ]
+    response = llm.with_structured_output(schema).invoke(messages)
+
+    if isinstance(response, dict):
+        goto = response.get("next")
+        reasoning = response.get("reasoning", "")
+    else:
+        goto = getattr(response, "next", None)
+        reasoning = getattr(response, "reasoning", "")
+
+    print(f"{label} Decision: {goto} (Reasoning: {reasoning})")
+    return goto, reasoning
 
 
 # ---------------------------------------------------------------------------
@@ -132,31 +172,9 @@ def superVisorAgent(state: State) -> Command[Literal['sub_infosupervisor', 'sub_
 
     # --- Fall through to LLM routing if fast-path didn't match ---
     if goto is None:
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    system_prompt
-                    + semantic_memory_prompt(main_state["semantic_memory"])
-                    + format_agent_outputs_prompt(main_state["agent_outputs"])
-                ),
-            },
-            {
-                "role": "user",
-                "content": f"User Request: {user_text}",
-            },
-        ]
-        llm_with_structured_output = llm.with_structured_output(MainSupervisorDecision)
-        response = llm_with_structured_output.invoke(messages)
-
-        if isinstance(response, dict):
-            goto = response.get("next")
-            reasoning = response.get("reasoning", "")
-        else:
-            goto = getattr(response, "next", None)
-            reasoning = getattr(response, "reasoning", "")
-
-        print(f"Main Supervisor Decision: {goto} (Reasoning: {reasoning})")
+        goto, reasoning = _llm_decide(
+            system_prompt, main_state, user_text, MainSupervisorDecision, "Main Supervisor",
+        )
 
     # --- Re-routing Guard: Never re-route to an already completed sub-supervisor ---
     if goto in main_state["agent_outputs"]:
@@ -225,31 +243,9 @@ def sub_infoSuperVisorAgent(state: State) -> Command[Literal['researcher', 'weat
 
     # --- Fall through to LLM routing if fast-path didn't match ---
     if goto is None:
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    sub_info_supervisor_prompt
-                    + semantic_memory_prompt(info_state["semantic_memory"])
-                    + format_agent_outputs_prompt(info_state["agent_outputs"])
-                ),
-            },
-            {
-                "role": "user",
-                "content": f"User Request: {user_text}",
-            },
-        ]
-        llm_with_structured_output = llm.with_structured_output(InfoSupervisorDecision)
-        response = llm_with_structured_output.invoke(messages)
-
-        if isinstance(response, dict):
-            goto = response.get("next")
-            reasoning = response.get("reasoning", "")
-        else:
-            goto = getattr(response, "next", None)
-            reasoning = getattr(response, "reasoning", "")
-
-        print(f"Sub-Info Decision: {goto} (Reasoning: {reasoning})")
+        goto, reasoning = _llm_decide(
+            sub_info_supervisor_prompt, info_state, user_text, InfoSupervisorDecision, "Sub-Info",
+        )
 
     # --- Guard: Never re-route to an already completed worker ---
     if goto in info_state["agent_outputs"]:
@@ -289,35 +285,13 @@ def sub_actionSuperVisorAgent(state: State) -> Command[Literal['action', 'superv
     routing_history = action_state.get("routing_plan", [])
     user_text = _extract_user_text(state)
 
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                sub_action_supervisor_prompt
-                + semantic_memory_prompt(action_state["semantic_memory"])
-                + format_agent_outputs_prompt(action_state["agent_outputs"])
-            ),
-        },
-        {
-            "role": "user",
-            "content": f"User Request: {user_text}",
-        },
-    ]
-    llm_with_structured_output = llm.with_structured_output(ActionSupervisorDecision)
-    response = llm_with_structured_output.invoke(messages)
-    
-    if isinstance(response, dict):
-        goto = response.get("next")
-        reasoning = response.get("reasoning", "")
-    else:
-        goto = getattr(response, "next", None)
-        reasoning = getattr(response, "reasoning", "")
-
-    print(f"Sub-Action Decision: {goto} (Reasoning: {reasoning})")
+    goto, reasoning = _llm_decide(
+        sub_action_supervisor_prompt, action_state, user_text, ActionSupervisorDecision, "Sub-Action",
+    )
 
     # --- Guard: Never re-route to action worker if already completed ---
     if goto in action_state["agent_outputs"]:
-        print(f"  ↳ Guard: action already completed [STATUS: DONE]. Returning to supervisor.")
+        print("  ↳ Guard: action already completed [STATUS: DONE]. Returning to supervisor.")
         goto = "supervisor"
 
     if goto == "supervisor" or action_state["agent_outputs"] or routing_history.count(goto) >= 2 or not goto:

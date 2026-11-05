@@ -115,15 +115,6 @@ class HealthResponse(BaseModel):
     default_user_id: str = "siri_user"
 
 
-class MemoryFactItem(BaseModel):
-    """Representation of an individual semantic memory fact."""
-    fact_id: str
-    content: Optional[str] = None
-    statement: Optional[str] = None
-    confidence: Optional[float] = None
-    category: Optional[str] = None
-
-
 class AddFactRequest(BaseModel):
     """Payload for manually injecting a semantic fact."""
     statement: Optional[str] = None
