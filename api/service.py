@@ -14,7 +14,8 @@ from agents.supervisor_agent import (
     superVisorAgent,
 )
 from agents.weather_agent import weather_agent
-from graph_builder.graph import GraphBuilder
+from graph_builder.graph import GraphBuilder, open_sqlite_checkpointer
+from memory.chat_history import ChatHistory, default_db_path
 from memory.data_model import FactCategory, SemanticFact
 from memory.observability import MemoryObserver
 from memory.runtime import create_configured_memory_store
@@ -67,6 +68,7 @@ class SiriAgentService:
 
         # Initialize and build LangGraph multi-agent workflow
         if self.builder is None:
+            db_path = default_db_path()
             self.builder = GraphBuilder(
                 guardrail=guardrail_agent,
                 supervisor=superVisorAgent,
@@ -78,6 +80,8 @@ class SiriAgentService:
                 output_sanitizer=output_sanitizer_agent,
                 memory_store=self.memory_store,
                 memory_observer=self.memory_observer,
+                checkpointer=open_sqlite_checkpointer(db_path),
+                chat_history=ChatHistory(db_path),
             )
 
         if getattr(self.builder, "graph", None) is None:
@@ -88,18 +92,35 @@ class SiriAgentService:
             raise RuntimeError("Failed to initialize SiriAgentService: builder or compiled graph is None.")
 
         self._is_initialized = True
+        self._resume_unfinished()
         LOGGER.info("SiriAgentService initialization complete.")
+
+    def _resume_unfinished(self) -> None:
+        """Finish turns a crash or shutdown interrupted; their answers go to chat history."""
+        resume = getattr(self.builder, "resume_unfinished", None)
+        if not callable(resume):
+            return
+        for resumed in resume():
+            if resumed["status"] == "success":
+                LOGGER.info("Resumed unfinished turn on thread '%s'.", resumed["thread_id"])
+                if self.learning_service is not None:
+                    self.learning_service.submit_completed_turn(resumed["messages"])
+            elif resumed["status"] == "error":
+                LOGGER.warning("Unfinished turn on thread '%s' failed again: %s", resumed["thread_id"], resumed["error"])
 
     def run_turn(
         self,
         messages: List[Dict[str, Any]],
         user_id: Optional[str] = None,
+        load_history: bool = True,
     ) -> Dict[str, Any]:
         """Execute a conversation turn through the compiled graph.
         
         Args:
             messages: List of conversation message dictionaries.
-            user_id: Optional user identifier for memory scoping.
+            user_id: Optional user identifier; also the conversation thread.
+            load_history: Prepend saved chat history. Pass False when the
+                client already sends the full conversation in `messages`.
             
         Returns:
             Dict containing final output, hop count, user ID, and exact token usage.
@@ -116,14 +137,14 @@ class SiriAgentService:
             raise RuntimeError("Agent workflow is not initialized (builder or graph is None).")
 
         active_user_id = user_id or self.default_user_id
-        initial_state = self.builder.create_turn_state(messages)
+        initial_state = self.builder.prepare_turn(active_user_id, messages, load_history=load_history)
 
         tracker = LangSmithTokenTracker()
         config = build_run_config(active_user_id, tracker)
 
         hop_count = 0
         final_state = initial_state
-        for state in self.builder.graph.stream(initial_state, stream_mode="values", config=config):
+        for state in self.builder.stream(initial_state, stream_mode="values", config=config):
             final_state = state
             hop_count += 1
             current_node = state.get("next", "")
@@ -154,9 +175,11 @@ class SiriAgentService:
         if "messages" in final_state and len(final_state["messages"]) > 0:
             final_output = final_state["messages"][-1].content
 
-        # Schedule post-turn memory distillation off the reply path
+        # Save the turn to chat history, drop its checkpoint, and learn from
+        # this turn's messages only (not the loaded history).
+        turn_messages = self.builder.complete_turn(active_user_id, final_state.get("messages", []))
         if self.learning_service is not None:
-            self.learning_service.submit_completed_turn(final_state.get("messages", []))
+            self.learning_service.submit_completed_turn(turn_messages)
 
         return {
             "response": final_output,
@@ -192,7 +215,7 @@ class SiriAgentService:
 
         hop_count = 0
         final_state = {}
-        for state in self.builder.graph.stream(resume_command, stream_mode="values", config=config):
+        for state in self.builder.stream(resume_command, stream_mode="values", config=config):
             final_state = state
             hop_count += 1
             current_node = state.get("next", "")
@@ -222,8 +245,9 @@ class SiriAgentService:
         if "messages" in final_state and len(final_state["messages"]) > 0:
             final_output = final_state["messages"][-1].content
 
+        turn_messages = self.builder.complete_turn(active_user_id, final_state.get("messages", []))
         if self.learning_service is not None:
-            self.learning_service.submit_completed_turn(final_state.get("messages", []))
+            self.learning_service.submit_completed_turn(turn_messages)
 
         return {
             "response": final_output,
@@ -232,6 +256,16 @@ class SiriAgentService:
             "status": "success",
             "token_usage": tracker.get_usage(),
         }
+
+    def get_chat_history(self, user_id: Optional[str] = None, limit: int = 50) -> Dict[str, Any]:
+        """Saved user messages and final answers for a conversation thread."""
+        if not self._is_initialized:
+            self.initialize()
+
+        target_user = user_id or self.default_user_id
+        history = getattr(self.builder, "chat_history", None)
+        messages = history.recent(target_user, limit) if history is not None else []
+        return {"user_id": target_user, "messages": messages}
 
     def get_memory_info(self, user_id: Optional[str] = None) -> Dict[str, Any]:
         """Retrieve stored semantic memory profile for a user."""

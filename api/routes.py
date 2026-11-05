@@ -61,6 +61,8 @@ async def chat_endpoint(
             service.run_turn,
             messages=messages,
             user_id=request_data.user_id,
+            # A client that sends the full conversation manages its own history.
+            load_history=request_data.messages is None,
         )
         return ChatResponse(
             response=result["response"],
@@ -103,7 +105,9 @@ async def chat_stream_endpoint(
             if service.builder is None:
                 raise RuntimeError("Agent workflow is not initialized (builder is None).")
 
-            initial_state = service.builder.create_turn_state(messages)
+            initial_state = service.builder.prepare_turn(
+                active_user_id, messages, load_history=request_data.messages is None,
+            )
             tracker = LangSmithTokenTracker()
             config = build_run_config(active_user_id, tracker)
 
@@ -141,8 +145,9 @@ async def chat_stream_endpoint(
             if "messages" in final_state and len(final_state["messages"]) > 0:
                 final_output = final_state["messages"][-1].content
 
+            turn_messages = service.builder.complete_turn(active_user_id, final_state.get("messages", []))
             if service.learning_service is not None:
-                service.learning_service.submit_completed_turn(final_state.get("messages", []))
+                service.learning_service.submit_completed_turn(turn_messages)
 
             usage_metrics = tracker.get_usage()
             yield f"data: {json.dumps({'event': 'complete', 'response': final_output, 'hops': max(0, hop_count - 1), 'token_usage': usage_metrics})}\n\n"
@@ -249,8 +254,9 @@ async def chat_resume_stream_endpoint(
             if "messages" in final_state and len(final_state["messages"]) > 0:
                 final_output = final_state["messages"][-1].content
 
+            turn_messages = service.builder.complete_turn(active_user_id, final_state.get("messages", []))
             if service.learning_service is not None:
-                service.learning_service.submit_completed_turn(final_state.get("messages", []))
+                service.learning_service.submit_completed_turn(turn_messages)
 
             usage_metrics = tracker.get_usage()
             yield f"data: {json.dumps({'event': 'complete', 'response': final_output, 'hops': max(0, hop_count - 1), 'token_usage': usage_metrics})}\n\n"
@@ -258,6 +264,19 @@ async def chat_resume_stream_endpoint(
             yield f"data: {json.dumps({'event': 'error', 'detail': str(exc)})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.get(
+    "/chat/history/{user_id}",
+    summary="Saved conversation",
+    description="User messages and Siri's final answers saved for a conversation thread, oldest first.",
+)
+async def get_chat_history(
+    user_id: str,
+    limit: int = 50,
+    service: SiriAgentService = Depends(get_agent_service),
+):
+    return service.get_chat_history(user_id=user_id, limit=limit)
 
 
 @router.get(

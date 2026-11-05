@@ -3,6 +3,13 @@ from langchain_core.tools import tool
 from langgraph.types import interrupt
 
 
+def human_answer_text(response) -> str:
+    """Normalize a resume value (plain text or a dict from the UI) to text."""
+    if isinstance(response, Mapping):
+        return str(response.get("answer") or response.get("response") or response.get("input") or response)
+    return str(response)
+
+
 @tool
 def ask_human(question: str) -> str:
     """Use this tool to ask the human user a question when you need clarification,
@@ -22,7 +29,4 @@ def ask_human(question: str) -> str:
         "question": question,
     })
 
-    if isinstance(response, Mapping):
-        return str(response.get("answer") or response.get("response") or response.get("input") or response)
-    
-    return str(response)
+    return human_answer_text(response)

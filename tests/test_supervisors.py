@@ -182,5 +182,50 @@ class TestActionSupervisor(unittest.TestCase):
         self.assertEqual(cmd.update["main_supervisor"]["agent_outputs"]["sub_actionsupervisor"], "unclear")
 
 
+class TestSupervisorAsksUser(unittest.TestCase):
+    """Each supervisor can pause for the user via the ask_user node."""
+
+    def _decide(self, decision):
+        return _fake_llm(decision)[0]
+
+    def test_main_asks_user(self):
+        llm = self._decide({"next": "ask_user", "reasoning": "unclear", "question": "What should I do?"})
+        with patch.object(sup, "llm", llm):
+            cmd = sup.superVisorAgent(_turn("hmm"))
+        self.assertEqual(cmd.goto, "ask_user")
+        self.assertEqual(cmd.update["clarification"], {"question": "What should I do?", "return_to": "supervisor"})
+        self.assertEqual(cmd.update["main_supervisor"]["routing_plan"], ["ask_user"])
+
+    def test_info_asks_user_and_returns_to_itself(self):
+        state = _turn("Mumbai today")
+        state["info_supervisor"] = new_supervisor_state(MEMORY)
+        llm = self._decide({"next": "ask_user", "reasoning": "no topic", "question": "Weather or news?"})
+        with patch.object(sup, "llm", llm):
+            cmd = sup.sub_infoSuperVisorAgent(state)
+        self.assertEqual(cmd.goto, "ask_user")
+        self.assertEqual(cmd.update["clarification"]["return_to"], "sub_infosupervisor")
+        self.assertEqual(cmd.update["info_supervisor"]["routing_plan"], ["ask_user"])
+
+    def test_action_question_falls_back_to_reasoning(self):
+        state = _turn("make something")
+        state["action_supervisor"] = new_supervisor_state(MEMORY)
+        llm = self._decide({"next": "ask_user", "reasoning": "Which file should I create?"})
+        with patch.object(sup, "llm", llm):
+            cmd = sup.sub_actionSuperVisorAgent(state)
+        self.assertEqual(cmd.goto, "ask_user")
+        self.assertEqual(
+            cmd.update["clarification"],
+            {"question": "Which file should I create?", "return_to": "sub_actionsupervisor"},
+        )
+
+    def test_does_not_ask_more_than_twice(self):
+        state = _turn("hmm")
+        state["main_supervisor"]["routing_plan"] = ["ask_user", "ask_user"]
+        llm = self._decide({"next": "ask_user", "reasoning": "still unclear", "question": "?"})
+        with patch.object(sup, "llm", llm):
+            cmd = sup.superVisorAgent(state)
+        self.assertEqual(cmd.goto, "output_sanitizer")
+
+
 if __name__ == "__main__":
     unittest.main()

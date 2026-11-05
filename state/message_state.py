@@ -44,6 +44,8 @@ class State(TypedDict):
     main_supervisor: SupervisorState
     info_supervisor: SupervisorState
     action_supervisor: SupervisorState
+    # Set by a supervisor that chose "ask_user": {"question", "return_to"}.
+    clarification: Optional[Dict[str, str]]
 
 
 def new_supervisor_state(
@@ -122,6 +124,16 @@ def latest_user_task(messages: List[Any]) -> str:
     return ""
 
 
+def current_turn_messages(messages: List[Any]) -> List[Any]:
+    """Messages from the latest user message onward — this turn only, no history."""
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        role = message.get("role") if isinstance(message, Mapping) else getattr(message, "type", None)
+        if role in {"user", "human"}:
+            return list(messages[index:])
+    return list(messages)
+
+
 def build_worker_state(
     state: Mapping[str, Any],
     supervisor_key: str,
@@ -159,19 +171,23 @@ def create_turn_state(messages: List[Any], semantic_memory: str = "") -> State:
         "main_supervisor": new_supervisor_state(semantic_memory),
         "info_supervisor": new_supervisor_state(),
         "action_supervisor": new_supervisor_state(),
+        "clarification": None,
     }
 
 
 class MainSupervisorDecision(BaseModel):
     reasoning: str
-    next: Literal["sub_infosupervisor", "sub_actionsupervisor", "FINISH"]
+    next: Literal["sub_infosupervisor", "sub_actionsupervisor", "ask_user", "FINISH"]
+    question: str = ""
 
 
 class InfoSupervisorDecision(BaseModel):
     reasoning: str
-    next: Literal["researcher", "weather", "supervisor"]
+    next: Literal["researcher", "weather", "ask_user", "supervisor"]
+    question: str = ""
 
 
 class ActionSupervisorDecision(BaseModel):
     reasoning: str
-    next: Literal["action", "supervisor"]
+    next: Literal["action", "ask_user", "supervisor"]
+    question: str = ""

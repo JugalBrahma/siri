@@ -129,19 +129,34 @@ def _llm_decide(base_prompt: str, scope: dict, user_text: str, schema, label: st
     if isinstance(response, dict):
         goto = response.get("next")
         reasoning = response.get("reasoning", "")
+        question = response.get("question", "")
     else:
         goto = getattr(response, "next", None)
         reasoning = getattr(response, "reasoning", "")
+        question = getattr(response, "question", "")
 
     print(f"{label} Decision: {goto} (Reasoning: {reasoning})")
-    return goto, reasoning
+    return goto, reasoning, question or ""
+
+
+def _ask_user(scope_key: str, scope_state: dict, routing_history: list, question: str, reasoning: str, return_to: str) -> Command:
+    """Pause for the user's answer via the ask_user node, then come back to `return_to`."""
+    question = question.strip() or reasoning.strip()
+    return Command(
+        goto="ask_user",
+        update={
+            scope_key: set_routing_plan(scope_state, routing_history + ["ask_user"]),
+            "clarification": {"question": question, "return_to": return_to},
+            "next": "ask_user",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
 # Main Supervisor
 # ---------------------------------------------------------------------------
 
-def superVisorAgent(state: State) -> Command[Literal['sub_infosupervisor', 'sub_actionsupervisor', 'output_sanitizer']]:
+def superVisorAgent(state: State) -> Command[Literal['sub_infosupervisor', 'sub_actionsupervisor', 'ask_user', 'output_sanitizer']]:
     print("--- SUPERVISOR AGENT ---")
     main_state = get_supervisor_state(state, "main_supervisor")
     routing_history = main_state.get("routing_plan", [])
@@ -163,6 +178,7 @@ def superVisorAgent(state: State) -> Command[Literal['sub_infosupervisor', 'sub_
     # --- Fast-path: skip the LLM call on the very first routing decision if unambiguous ---
     goto = None
     reasoning = ""
+    question = ""
     if not routing_history and not main_state["agent_outputs"]:
         fast = _fast_path_main(user_text)
         if fast:
@@ -172,7 +188,7 @@ def superVisorAgent(state: State) -> Command[Literal['sub_infosupervisor', 'sub_
 
     # --- Fall through to LLM routing if fast-path didn't match ---
     if goto is None:
-        goto, reasoning = _llm_decide(
+        goto, reasoning, question = _llm_decide(
             system_prompt, main_state, user_text, MainSupervisorDecision, "Main Supervisor",
         )
 
@@ -207,6 +223,9 @@ def superVisorAgent(state: State) -> Command[Literal['sub_infosupervisor', 'sub_
             },
         )
 
+    if goto == "ask_user":
+        return _ask_user("main_supervisor", main_state, routing_history, question, reasoning, "supervisor")
+
     updated_main_state = set_routing_plan(main_state, routing_history + [goto])
     update = {"main_supervisor": updated_main_state, "next": goto}
     if goto == "sub_infosupervisor":
@@ -225,7 +244,7 @@ def superVisorAgent(state: State) -> Command[Literal['sub_infosupervisor', 'sub_
 # Sub-Info Supervisor
 # ---------------------------------------------------------------------------
 
-def sub_infoSuperVisorAgent(state: State) -> Command[Literal['researcher', 'weather', 'supervisor']]:
+def sub_infoSuperVisorAgent(state: State) -> Command[Literal['researcher', 'weather', 'ask_user', 'supervisor']]:
     print("--- SUB INFO SUPERVISOR AGENT ---")
     info_state = get_supervisor_state(state, "info_supervisor")
     routing_history = info_state.get("routing_plan", [])
@@ -234,6 +253,7 @@ def sub_infoSuperVisorAgent(state: State) -> Command[Literal['researcher', 'weat
     # --- Fast-path: skip the LLM call on the first routing decision ---
     goto = None
     reasoning = ""
+    question = ""
     if not routing_history and not info_state["agent_outputs"]:
         fast = _fast_path_info(user_text)
         if fast:
@@ -243,7 +263,7 @@ def sub_infoSuperVisorAgent(state: State) -> Command[Literal['researcher', 'weat
 
     # --- Fall through to LLM routing if fast-path didn't match ---
     if goto is None:
-        goto, reasoning = _llm_decide(
+        goto, reasoning, question = _llm_decide(
             sub_info_supervisor_prompt, info_state, user_text, InfoSupervisorDecision, "Sub-Info",
         )
 
@@ -268,6 +288,9 @@ def sub_infoSuperVisorAgent(state: State) -> Command[Literal['researcher', 'weat
             update={"main_supervisor": main_state, "next": "supervisor"},
         )
 
+    if goto == "ask_user":
+        return _ask_user("info_supervisor", info_state, routing_history, question, reasoning, "sub_infosupervisor")
+
     info_state = set_routing_plan(info_state, routing_history + [goto])
     return Command(
         goto=goto,
@@ -279,13 +302,13 @@ def sub_infoSuperVisorAgent(state: State) -> Command[Literal['researcher', 'weat
 # Sub-Action Supervisor
 # ---------------------------------------------------------------------------
 
-def sub_actionSuperVisorAgent(state: State) -> Command[Literal['action', 'supervisor']]:
+def sub_actionSuperVisorAgent(state: State) -> Command[Literal['action', 'ask_user', 'supervisor']]:
     print("--- SUB ACTION SUPERVISOR AGENT ---")
     action_state = get_supervisor_state(state, "action_supervisor")
     routing_history = action_state.get("routing_plan", [])
     user_text = _extract_user_text(state)
 
-    goto, reasoning = _llm_decide(
+    goto, reasoning, question = _llm_decide(
         sub_action_supervisor_prompt, action_state, user_text, ActionSupervisorDecision, "Sub-Action",
     )
 
@@ -306,6 +329,9 @@ def sub_actionSuperVisorAgent(state: State) -> Command[Literal['action', 'superv
             goto="supervisor",
             update={"main_supervisor": main_state, "next": "supervisor"},
         )
+
+    if goto == "ask_user":
+        return _ask_user("action_supervisor", action_state, routing_history, question, reasoning, "sub_actionsupervisor")
 
     action_state = set_routing_plan(action_state, routing_history + [goto])
     return Command(

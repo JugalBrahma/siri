@@ -22,6 +22,12 @@ class FakeBuilder:
     def create_turn_state(self, messages):
         return {"messages": messages}
 
+    def prepare_turn(self, thread_id, messages, load_history=True):
+        return {"messages": messages}
+
+    def complete_turn(self, thread_id, messages):
+        return list(messages)
+
     def get_state(self, config=None):
         return FakeState([])
 

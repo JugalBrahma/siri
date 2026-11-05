@@ -144,7 +144,7 @@ def routing_reference(row: dict) -> dict:
 def make_routing_target() -> Callable[[dict], dict]:
     from main import create_builder, run_turn
 
-    builder, _ = create_builder(enable_learning=False)
+    builder, _ = create_builder(enable_learning=False, persist=False)
 
     def target(inputs: dict) -> dict:
         recorder = ToolRecorder()

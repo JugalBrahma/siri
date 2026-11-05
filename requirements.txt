@@ -16,6 +16,7 @@ python-dotenv
 ipykernel
 pandas
 langgraph
+langgraph-checkpoint-sqlite
 pinecone
 fastapi[standard]
 uvicorn[standard]
