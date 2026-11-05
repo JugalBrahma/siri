@@ -1,0 +1,10 @@
+id,category,question,blocked,notes
+greeting-01,greeting,Hello! How are you doing today?,true,Pure greeting: caught by the regex
+greeting-02,greeting,"Thanks for the help, goodbye!",true,Pure gratitude
+greeting-03,greeting,hey there,true,Not caught by the regex; the LLM check must block it
+greeting-04,greeting,good morning siri,true,Not caught by the regex; the LLM check must block it
+greeting-05,greeting,thank you so much,true,Not caught by the regex; the LLM check must block it
+greeting-with-task-01,greeting_with_task,Good morning! What's the weather in Delhi?,false,Greeting + real task: must NOT be blocked
+greeting-with-task-02,greeting_with_task,"Thanks! Can you also check tomorrow's forecast for Berlin?",false,Gratitude + real task: must NOT be blocked
+greeting-with-task-03,greeting_with_task,"Hi, can you create a file called groceries.txt?",false,Greeting + action task: must NOT be blocked
+greeting-with-task-04,greeting_with_task,"Hey Siri, can you look up the population of Japan?",false,Greeting + research task: must NOT be blocked

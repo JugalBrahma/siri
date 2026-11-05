@@ -20,16 +20,18 @@ def run_worker(
     tools: list,
     base_prompt: str,
     task_suffix: str = "",
+    middleware: list | None = None,
 ) -> Command:
     """Run a tool-using worker agent on the current task and report back.
 
     `scope` is the supervisor state the worker belongs to ("info_supervisor"
     or "action_supervisor"); its output is recorded there under `name`, and
-    control returns to `goto`.
+    control returns to `goto`. `middleware` is passed to create_agent, e.g. a
+    ToolCallLimitMiddleware to cap how many times a tool may be called.
     """
     worker_state = build_worker_state(state, scope)
     system_prompt = base_prompt + semantic_memory_prompt(worker_state["semantic_memory"])
-    agent_exec = create_agent(llm, tools, system_prompt=system_prompt)
+    agent_exec = create_agent(llm, tools, system_prompt=system_prompt, middleware=middleware or [])
 
     # Use only the latest user task, not the full conversation history
     result = agent_exec.invoke(

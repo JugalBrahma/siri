@@ -60,18 +60,19 @@ def guardrail_agent(state: State) -> Command[Literal["supervisor", "__end__"]]:
         return Command(goto="supervisor")
 
     try:
-        rails.generate(messages=[{"role": "user", "content": raw_input}])
-        explain = rails.explain()
+        # Run only the input rails (the self-check YES/NO call). A full
+        # rails.generate() also runs intent detection and writes a complete
+        # bot answer that we discard, costing ~20s and 3 extra LLM calls.
+        result = rails.generate(
+            messages=[{"role": "user", "content": raw_input}],
+            options={"rails": ["input"], "log": {"activated_rails": True}},
+        )
 
-        # Check if NeMo Guardrails triggered an input rail block
-        triggered = getattr(explain, "triggered_input_rails", None)
-        is_blocked = bool(triggered) if triggered is not None else False
-
-        # Fallback check on colang history if available
-        if not is_blocked and hasattr(explain, "colang_history") and explain.colang_history:
-            history = str(explain.colang_history).lower()
-            if "refuse" in history or "jailbreak" in history:
-                is_blocked = True
+        # An input rail that blocks the message sets stop=True.
+        activated = getattr(getattr(result, "log", None), "activated_rails", None) or []
+        is_blocked = any(
+            rail.type == "input" and rail.stop for rail in activated
+        )
 
         if is_blocked:
             return Command(

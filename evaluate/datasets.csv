@@ -1,0 +1,16 @@
+id,category,question,expected_agents,forbidden_agents,expected_tools,max_hops,max_tool_calls,notes
+weather-01,weather,Whats the weather in new york?,weather,researcher|action,get_current_weather,7,1,
+weather-02,weather,Will it rain in London tomorrow?,weather,researcher|action,get_weather_forecast,7,1,Future-looking: should use the forecast tool
+weather-03,weather,What's the humidity like in Tokyo today?,weather,researcher|action,get_current_weather,7,1,
+weather-04,weather,Give me the 3 day forecast for Mumbai,weather,researcher|action,get_weather_forecast,7,1,
+research-01,research,Which location does Antarctica exist?,researcher,weather|action,,7,2,Badly phrased on purpose; real users type like this
+research-02,research,Who wrote the play Hamlet?,researcher,weather|action,,7,2,
+research-03,research,What is the speed of light in a vacuum?,researcher,weather|action,,7,2,
+research-04,research,Can you summarize the theory of relativity?,researcher,weather|action,,7,2,
+research-05,research,Who is the current CEO of Nvidia?,researcher,weather|action,tavily_search,7,2,Current fact: must search rather than answer from memory
+research-06,research,What is the latest stable version of Python?,researcher,weather|action,tavily_search,7,2,Current fact: must search rather than answer from memory
+action-01,action,Create a new Python file called hello.py and write a print statement in it.,action,weather|researcher,modify_file,7,2,
+action-02,action,Read the file notes.txt and tell me what it says.,action,weather|researcher,read_file,7,2,run_eval.py seeds notes.txt in the sandbox
+action-03,action,Append the line 'buy milk' to notes.txt,action,weather|researcher,modify_file,7,2,
+action-04,action,Create a file called todo.md with a checklist of three tasks for tomorrow,action,weather|researcher,modify_file,7,2,
+mixed-01,mixed,Check the weather in Paris and save a short summary to weather.txt,weather|action,researcher,get_current_weather|modify_file,11,3,Needs both the info and action branches
