@@ -252,6 +252,38 @@ class FastAPITests(unittest.TestCase):
         self.assertIn("complete", body)
         self.assertNotIn("NoneType", body)
 
+    def test_status_idle(self):
+        response = self.client.get("/chat/status/test_user")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "idle")
+
+    def test_status_resuming_blocks_new_messages(self):
+        self.service._resuming["test_user"] = "action"
+        try:
+            status_data = self.client.get("/chat/status/test_user").json()
+            self.assertEqual(status_data["status"], "resuming")
+            self.assertEqual(status_data["node"], "action")
+            self.assertEqual(
+                self.client.post("/chat", json={"message": "hi", "user_id": "test_user"}).status_code, 409,
+            )
+            self.assertEqual(
+                self.client.post("/chat/stream", json={"message": "hi", "user_id": "test_user"}).status_code, 409,
+            )
+            # Other conversations are not blocked.
+            self.assertEqual(
+                self.client.post("/chat", json={"message": "hi", "user_id": "someone_else"}).status_code, 200,
+            )
+        finally:
+            self.service._resuming.clear()
+
+    def test_status_waiting_for_answer(self):
+        interrupt = type("Interrupt", (), {"value": {"type": "ask_human", "question": "Which city?"}})()
+        task = type("Task", (), {"interrupts": [interrupt]})()
+        self.fake_builder.get_state = lambda config=None: FakeState([task])
+        data = self.client.get("/chat/status/test_user").json()
+        self.assertEqual(data["status"], "waiting_for_answer")
+        self.assertEqual(data["question"], "Which city?")
+
     def test_resume_turn_raises_when_builder_none(self):
         """Test resume_turn raises RuntimeError instead of AttributeError if builder cannot be created."""
         service = SiriAgentService(

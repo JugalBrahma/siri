@@ -17,6 +17,15 @@ from services.token_tracker import LangSmithTokenTracker, build_run_config
 router = APIRouter(tags=["Siri Agent API"])
 
 
+RESUMING_DETAIL = "Siri is still finishing your previous request. Try again when it is done."
+
+
+def _reject_while_resuming(service: SiriAgentService, user_id) -> None:
+    """A new message would discard the turn being resumed, so refuse it for now."""
+    if service.is_resuming(user_id):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=RESUMING_DETAIL)
+
+
 def get_agent_service(request: Request) -> SiriAgentService:
     """Dependency that extracts the SiriAgentService from application state."""
     service = getattr(request.app.state, "agent_service", None)
@@ -55,6 +64,7 @@ async def chat_endpoint(
     request_data: ChatRequest,
     service: SiriAgentService = Depends(get_agent_service),
 ) -> ChatResponse:
+    _reject_while_resuming(service, request_data.user_id)
     try:
         messages = request_data.to_message_list()
         result = await asyncio.to_thread(
@@ -89,6 +99,7 @@ async def chat_stream_endpoint(
     service: SiriAgentService = Depends(get_agent_service),
 ):
     """Stream execution progress using SSE format with exact LangSmith token metrics."""
+    _reject_while_resuming(service, request_data.user_id)
     messages = request_data.to_message_list()
     active_user_id = request_data.user_id or service.default_user_id
 
@@ -267,6 +278,22 @@ async def chat_resume_stream_endpoint(
 
 
 @router.get(
+    "/chat/status/{user_id}",
+    summary="Conversation status",
+    description=(
+        "What the conversation is doing right now: 'resuming' (finishing a turn a restart "
+        "interrupted; `node` names the agent), 'waiting_for_answer' (Siri asked `question` "
+        "and the answer goes to /chat/resume), or 'idle'."
+    ),
+)
+async def get_chat_status(
+    user_id: str,
+    service: SiriAgentService = Depends(get_agent_service),
+):
+    return service.get_chat_status(user_id=user_id)
+
+
+@router.get(
     "/chat/history/{user_id}",
     summary="Saved conversation",
     description="User messages and Siri's final answers saved for a conversation thread, oldest first.",
@@ -277,6 +304,18 @@ async def get_chat_history(
     service: SiriAgentService = Depends(get_agent_service),
 ):
     return service.get_chat_history(user_id=user_id, limit=limit)
+
+
+@router.delete(
+    "/chat/history/{user_id}",
+    summary="Clear saved conversation",
+    description="Delete a conversation's saved messages and any turn paused on a question. Semantic memory is not affected.",
+)
+async def clear_chat_history(
+    user_id: str,
+    service: SiriAgentService = Depends(get_agent_service),
+):
+    return service.clear_chat_history(user_id=user_id)
 
 
 @router.get(

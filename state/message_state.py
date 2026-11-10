@@ -41,6 +41,9 @@ class State(TypedDict):
 
     messages: Annotated[List[AnyMessage], add_messages]
     next: str
+    # The last few finished turns, already trimmed (see format_recent_history).
+    # Read-only context for supervisors and workers; set once per turn.
+    recent_history: str
     main_supervisor: SupervisorState
     info_supervisor: SupervisorState
     action_supervisor: SupervisorState
@@ -134,6 +137,53 @@ def current_turn_messages(messages: List[Any]) -> List[Any]:
     return list(messages)
 
 
+# How much past conversation the agents see on each turn.
+HISTORY_TURNS = 2          # last 2 questions, in full
+ANSWER_CHAR_LIMIT = 300    # Siri's answers to them, cut to this many characters
+
+
+def _role_and_content(message: Any) -> tuple:
+    if isinstance(message, Mapping):
+        return message.get("role"), message.get("content", "")
+    return getattr(message, "type", None), getattr(message, "content", "")
+
+
+def format_recent_history(
+    messages: List[Any],
+    turns: int = HISTORY_TURNS,
+    answer_chars: int = ANSWER_CHAR_LIMIT,
+) -> str:
+    """Render the last `turns` questions in full and their answers trimmed."""
+    user_indices = [i for i, m in enumerate(messages) if _role_and_content(m)[0] in {"user", "human"}]
+    if not user_indices or turns <= 0:
+        return ""
+
+    lines = []
+    for message in messages[user_indices[-turns:][0]:]:
+        role, content = _role_and_content(message)
+        text = str(content).strip()
+        if not text:
+            continue
+        if role in {"user", "human"}:
+            lines.append(f"User: {text}")
+        else:
+            if len(text) > answer_chars:
+                text = text[:answer_chars].rstrip() + "…"
+            lines.append(f"Siri: {text}")
+    return "\n".join(lines)
+
+
+def with_recent_history(request: str, recent_history: str) -> str:
+    """Put the recent conversation in front of a request, if there is any."""
+    if not recent_history.strip():
+        return request
+    return (
+        "Recent conversation (context only; those requests were already answered):\n"
+        f"{recent_history.strip()}\n\n"
+        f"Current request: {request}"
+    )
+
+
 def build_worker_state(
     state: Mapping[str, Any],
     supervisor_key: str,
@@ -142,7 +192,7 @@ def build_worker_state(
     supervisor_state = get_supervisor_state(state, supervisor_key)
     messages = list(state.get("messages", []))
     return {
-        "task": latest_user_task(messages),
+        "task": with_recent_history(latest_user_task(messages), str(state.get("recent_history") or "")),
         "semantic_memory": supervisor_state["semantic_memory"],
         "retry_count": 0,
         "latest_tool_result": None,
@@ -163,11 +213,16 @@ def semantic_memory_prompt(semantic_memory: str) -> str:
     )
 
 
-def create_turn_state(messages: List[Any], semantic_memory: str = "") -> State:
+def create_turn_state(
+    messages: List[Any],
+    semantic_memory: str = "",
+    recent_history: str = "",
+) -> State:
     """Build the state for one user turn after its single memory retrieval."""
     return {
         "messages": messages,
         "next": "",
+        "recent_history": recent_history,
         "main_supervisor": new_supervisor_state(semantic_memory),
         "info_supervisor": new_supervisor_state(),
         "action_supervisor": new_supervisor_state(),

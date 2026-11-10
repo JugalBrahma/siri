@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 import logging
 import os
+import threading
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -14,7 +15,7 @@ from agents.supervisor_agent import (
     superVisorAgent,
 )
 from agents.weather_agent import weather_agent
-from graph_builder.graph import GraphBuilder, open_sqlite_checkpointer
+from graph_builder.graph import GraphBuilder, open_sqlite_checkpointer, pending_interrupt
 from memory.chat_history import ChatHistory, default_db_path
 from memory.data_model import FactCategory, SemanticFact
 from memory.observability import MemoryObserver
@@ -42,6 +43,9 @@ class SiriAgentService:
         self.learning_service = learning_service
         self.builder = builder
         self._is_initialized = False
+        # thread_id -> node being resumed, while a background resume runs.
+        self._resuming: Dict[str, str] = {}
+        self._resuming_lock = threading.Lock()
 
     def initialize(self) -> None:
         """Initialize semantic memory, learning workers, and compile LangGraph."""
@@ -92,21 +96,66 @@ class SiriAgentService:
             raise RuntimeError("Failed to initialize SiriAgentService: builder or compiled graph is None.")
 
         self._is_initialized = True
-        self._resume_unfinished()
+        self._start_background_resume()
         LOGGER.info("SiriAgentService initialization complete.")
 
-    def _resume_unfinished(self) -> None:
-        """Finish turns a crash or shutdown interrupted; their answers go to chat history."""
-        resume = getattr(self.builder, "resume_unfinished", None)
-        if not callable(resume):
+    def _start_background_resume(self) -> None:
+        """Finish turns a crash or shutdown interrupted, without blocking startup.
+
+        The threads are marked as resuming before this returns, so the first
+        status request after startup already reports them.
+        """
+        find = getattr(self.builder, "unfinished_threads", None)
+        if not callable(find):
             return
-        for resumed in resume():
+        unfinished = find()
+        if not unfinished:
+            return
+        with self._resuming_lock:
+            self._resuming.update(dict(unfinished))
+        threading.Thread(target=self._resume_all, args=(unfinished,), name="siri-resume", daemon=True).start()
+
+    def _resume_all(self, unfinished: List[tuple]) -> None:
+        for thread_id, _node in unfinished:
+            try:
+                resumed = self.builder.resume_thread(thread_id)
+            finally:
+                with self._resuming_lock:
+                    self._resuming.pop(thread_id, None)
             if resumed["status"] == "success":
-                LOGGER.info("Resumed unfinished turn on thread '%s'.", resumed["thread_id"])
+                LOGGER.info("Resumed unfinished turn on thread '%s'.", thread_id)
                 if self.learning_service is not None:
                     self.learning_service.submit_completed_turn(resumed["messages"])
             elif resumed["status"] == "error":
-                LOGGER.warning("Unfinished turn on thread '%s' failed again: %s", resumed["thread_id"], resumed["error"])
+                LOGGER.warning("Unfinished turn on thread '%s' failed again: %s", thread_id, resumed["error"])
+
+    def is_resuming(self, user_id: Optional[str] = None) -> bool:
+        """True while a background resume is finishing this thread's last turn."""
+        with self._resuming_lock:
+            return (user_id or self.default_user_id) in self._resuming
+
+    def get_chat_status(self, user_id: Optional[str] = None) -> Dict[str, Any]:
+        """What the thread is doing: 'resuming', 'waiting_for_answer', or 'idle'."""
+        if not self._is_initialized:
+            self.initialize()
+
+        thread_id = user_id or self.default_user_id
+        with self._resuming_lock:
+            node = self._resuming.get(thread_id)
+        if node is not None:
+            return {"user_id": thread_id, "status": "resuming", "node": node or None, "question": None}
+
+        state_getter = getattr(self.builder, "get_state", None)
+        snapshot = state_getter({"configurable": {"thread_id": thread_id}}) if callable(state_getter) else None
+        interrupt = pending_interrupt(snapshot)
+        if interrupt is not None:
+            return {
+                "user_id": thread_id,
+                "status": "waiting_for_answer",
+                "node": None,
+                "question": interrupt.get("question", ""),
+            }
+        return {"user_id": thread_id, "status": "idle", "node": None, "question": None}
 
     def run_turn(
         self,
@@ -266,6 +315,30 @@ class SiriAgentService:
         history = getattr(self.builder, "chat_history", None)
         messages = history.recent(target_user, limit) if history is not None else []
         return {"user_id": target_user, "messages": messages}
+
+    def clear_chat_history(self, user_id: Optional[str] = None) -> Dict[str, Any]:
+        """Delete a conversation: its saved turns and any unfinished/paused turn.
+
+        Semantic memory facts are not touched (see clear_user_memory).
+        """
+        if not self._is_initialized:
+            self.initialize()
+
+        target_user = user_id or self.default_user_id
+        history = getattr(self.builder, "chat_history", None)
+        cleared = history.clear(target_user) if history is not None else 0
+
+        # Drop a turn left paused on an ask_human question so it can't be resumed.
+        checkpointer = getattr(self.builder, "checkpointer", None)
+        if checkpointer is not None:
+            checkpointer.delete_thread(target_user)
+
+        LOGGER.info("[Chat History] Cleared %d messages for user '%s'.", cleared, target_user)
+        return {
+            "status": "success",
+            "user_id": target_user,
+            "cleared_messages": cleared,
+        }
 
     def get_memory_info(self, user_id: Optional[str] = None) -> Dict[str, Any]:
         """Retrieve stored semantic memory profile for a user."""

@@ -7,7 +7,14 @@ from time import perf_counter
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
-from state.message_state import State, create_turn_state, current_turn_messages, latest_user_task
+from state.message_state import (
+    HISTORY_TURNS,
+    State,
+    create_turn_state,
+    current_turn_messages,
+    format_recent_history,
+    latest_user_task,
+)
 from memory.observability import MemoryObserver
 from services.text import message_text
 
@@ -62,7 +69,7 @@ class GraphBuilder:
         checkpointer=None,
         chat_history=None,
         ask_user=None,
-        history_limit: int = 10,
+        history_turns: int = HISTORY_TURNS,
     ):
         self.supervisor = supervisor
         self.sub_infosupervisor = sub_infosupervisor 
@@ -85,7 +92,7 @@ class GraphBuilder:
         self.checkpointer = checkpointer if checkpointer is not None else MemorySaver()
         # Optional ChatHistory: user messages + final answers only.
         self.chat_history = chat_history
-        self.history_limit = history_limit
+        self.history_turns = history_turns
         self.graph: Any = None
         
 
@@ -149,10 +156,10 @@ class GraphBuilder:
             print(f"[Memory Fetch] Failed after {round(elapsed_ms, 1)}ms: {exc}")
             return ""
 
-    def create_turn_state(self, messages: list) -> State:
+    def create_turn_state(self, messages: list, recent_history: str = "") -> State:
         """Build a turn state after fetching semantic memory exactly once."""
         semantic_memory = self._fetch_semantic_memory()
-        return create_turn_state(messages, semantic_memory)
+        return create_turn_state(messages, semantic_memory, recent_history)
 
     def run(self, messages: list, config: Optional[RunnableConfig] = None) -> dict:
         """
@@ -206,15 +213,21 @@ class GraphBuilder:
 
         Any checkpoint left on the thread belongs to a turn that never
         finished (e.g. an ask_human question the user ignored); a new message
-        replaces that turn instead of mixing into it. Recent chat history is
-        placed before the new messages unless the caller sends its own.
+        replaces that turn instead of mixing into it.
+
+        The last `history_turns` turns become `recent_history` (questions in
+        full, answers trimmed). They come from saved chat history, or, when the
+        caller sends the whole conversation itself, from everything before its
+        last message. Only the new message goes into `messages`.
         """
         self._ensure_graph()
         self.checkpointer.delete_thread(thread_id)
-        history = []
+        new_messages = list(new_messages)
         if load_history and self.chat_history is not None:
-            history = self.chat_history.recent(thread_id, self.history_limit)
-        return self.create_turn_state(history + list(new_messages))
+            past = self.chat_history.recent(thread_id, self.history_turns * 2)
+        else:
+            past, new_messages = new_messages[:-1], new_messages[-1:]
+        return self.create_turn_state(new_messages, format_recent_history(past, self.history_turns))
 
     def complete_turn(self, thread_id: str, messages: list) -> list:
         """Save a finished turn to chat history and delete its checkpoint.
@@ -233,39 +246,50 @@ class GraphBuilder:
         self.checkpointer.delete_thread(thread_id)
         return turn
 
-    def resume_unfinished(self) -> list[dict]:
-        """Continue every turn that a crash or shutdown left unfinished.
+    def unfinished_threads(self) -> list[tuple[str, str]]:
+        """(thread_id, next node) for turns a crash or shutdown left unfinished.
 
-        Runs once at startup. Each turn restarts from the node that was
-        running when it stopped; nodes that already finished are not re-run.
-        Turns paused on ask_human are left waiting for the user's answer.
+        Turns paused on ask_human are not included: they wait for the user.
         """
         graph = self._ensure_graph()
         thread_ids = list(dict.fromkeys(
             saved.config["configurable"]["thread_id"] for saved in self.checkpointer.list(None)
         ))
-        results = []
+        unfinished = []
         for thread_id in thread_ids:
-            config = _thread_config(thread_id)
-            snapshot = graph.get_state(config)
-            if pending_interrupt(snapshot) is not None:
-                continue
-            try:
-                if snapshot.next:
-                    print(f"[Resume] Continuing thread '{thread_id}' at {', '.join(snapshot.next)}")
-                    for _ in self.stream(None, stream_mode="updates", config=config):
-                        pass
-                    snapshot = graph.get_state(config)
-                    interrupt = pending_interrupt(snapshot)
-                    if interrupt is not None:
-                        results.append({"thread_id": thread_id, "status": "interrupted", "interrupt": interrupt})
-                        continue
-                messages = list(snapshot.values.get("messages", []))
-                turn = self.complete_turn(thread_id, messages)
-                answer = message_text(getattr(turn[-1], "content", "")) if turn else ""
-                results.append({"thread_id": thread_id, "status": "success", "response": answer, "messages": turn})
-            except Exception as exc:
-                # Leave the checkpoint in place; the next startup tries again.
-                LOGGER.warning("Could not resume thread %s: %s", thread_id, exc)
-                results.append({"thread_id": thread_id, "status": "error", "error": f"{type(exc).__name__}: {exc}"})
-        return results
+            snapshot = graph.get_state(_thread_config(thread_id))
+            if pending_interrupt(snapshot) is None:
+                unfinished.append((thread_id, ", ".join(snapshot.next)))
+        return unfinished
+
+    def resume_thread(self, thread_id: str) -> dict:
+        """Continue one unfinished turn from the node it stopped at and finish it."""
+        graph = self._ensure_graph()
+        config = _thread_config(thread_id)
+        snapshot = graph.get_state(config)
+        try:
+            if snapshot.next:
+                print(f"[Resume] Continuing thread '{thread_id}' at {', '.join(snapshot.next)}")
+                for _ in self.stream(None, stream_mode="updates", config=config):
+                    pass
+                snapshot = graph.get_state(config)
+                interrupt = pending_interrupt(snapshot)
+                if interrupt is not None:
+                    return {"thread_id": thread_id, "status": "interrupted", "interrupt": interrupt}
+            messages = list(snapshot.values.get("messages", []))
+            turn = self.complete_turn(thread_id, messages)
+            answer = message_text(getattr(turn[-1], "content", "")) if turn else ""
+            return {"thread_id": thread_id, "status": "success", "response": answer, "messages": turn}
+        except Exception as exc:
+            # Leave the checkpoint in place; the next startup tries again.
+            LOGGER.warning("Could not resume thread %s: %s", thread_id, exc)
+            return {"thread_id": thread_id, "status": "error", "error": f"{type(exc).__name__}: {exc}"}
+
+    def resume_unfinished(self) -> list[dict]:
+        """Continue every turn that a crash or shutdown left unfinished.
+
+        Each turn restarts from the node that was running when it stopped;
+        nodes that already finished are not re-run. Turns paused on ask_human
+        are left waiting for the user's answer.
+        """
+        return [self.resume_thread(thread_id) for thread_id, _ in self.unfinished_threads()]

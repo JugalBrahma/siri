@@ -5,6 +5,7 @@ SQLite file, so nothing carries over in memory between the two.
 """
 
 import tempfile
+import threading
 import unittest
 from collections import Counter
 from pathlib import Path
@@ -20,7 +21,7 @@ def _thread(thread_id):
     return {"configurable": {"thread_id": thread_id}}
 
 
-def _nodes(calls: Counter, *, crash_weather_once=False, ask_city=False, supervisor_asks=False):
+def _nodes(calls: Counter, *, crash_weather_once=False, ask_city=False, supervisor_asks=False, weather_gate=None):
     """Stand-in agents that follow the real graph's edges and count their runs."""
 
     def guardrail(state):
@@ -40,6 +41,8 @@ def _nodes(calls: Counter, *, crash_weather_once=False, ask_city=False, supervis
         calls["weather"] += 1
         if crash_weather_once and calls["weather"] == 1:
             raise RuntimeError("laptop shut down")
+        if weather_gate is not None:
+            weather_gate.wait(5)
         return {"messages": [AIMessage(content="18°C and sunny", name="weather")]}
 
     def researcher(state):
@@ -74,7 +77,9 @@ def _nodes(calls: Counter, *, crash_weather_once=False, ask_city=False, supervis
     )
 
 
-class PersistenceTests(unittest.TestCase):
+class _SqliteHarness(unittest.TestCase):
+    """A temp SQLite file plus builders on it; a second builder is a restart."""
+
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.db_path = Path(self._tmp.name) / "siri.db"
@@ -103,6 +108,8 @@ class PersistenceTests(unittest.TestCase):
         for _ in builder.stream(state, stream_mode="updates", config=_thread(thread_id)):
             pass
 
+
+class PersistenceTests(_SqliteHarness):
     def test_crash_resumes_from_the_agent_that_was_running(self):
         first = self._builder(crash_weather_once=True)
         with self.assertRaises(RuntimeError):
@@ -174,22 +181,25 @@ class PersistenceTests(unittest.TestCase):
         self.assertEqual(self.calls["guardrail"], 1)
         self.assertEqual(restarted.chat_history.recent("siri_user")[0]["content"], turn[0].content)
 
-    def test_next_turn_gets_history_and_learns_only_from_itself(self):
+    def test_next_turn_sees_last_two_turns_and_learns_only_from_itself(self):
         builder = self._builder()
+        builder.chat_history.add_turn("siri_user", "Hi", "Hello!")
+        builder.chat_history.add_turn("siri_user", "Weather in Paris?", "12°C")
         builder.chat_history.add_turn("siri_user", "Weather in Tokyo?", "18°C")
 
         state = builder.prepare_turn("siri_user", [{"role": "user", "content": "And tomorrow?"}])
         self.assertEqual(
-            [m["content"] for m in state["messages"]],
-            ["Weather in Tokyo?", "18°C", "And tomorrow?"],
+            state["recent_history"],
+            "User: Weather in Paris?\nSiri: 12°C\nUser: Weather in Tokyo?\nSiri: 18°C",
         )
+        self.assertEqual([m["content"] for m in state["messages"]], ["And tomorrow?"])
 
         for _ in builder.stream(state, stream_mode="updates", config=_thread("siri_user")):
             pass
         turn = builder.complete_turn("siri_user", builder.get_state(_thread("siri_user")).values["messages"])
 
         self.assertEqual(turn[0].content, "And tomorrow?")
-        self.assertEqual(len(builder.chat_history.recent("siri_user")), 4)
+        self.assertEqual(len(builder.chat_history.recent("siri_user", limit=50)), 8)
 
     def test_new_message_replaces_an_abandoned_paused_turn(self):
         builder = self._builder(ask_city=True)
@@ -199,6 +209,41 @@ class PersistenceTests(unittest.TestCase):
         builder.prepare_turn("siri_user", [{"role": "user", "content": "Never mind"}])
 
         self.assertEqual(list(builder.checkpointer.list(_thread("siri_user"))), [])
+
+
+class BackgroundResumeTests(_SqliteHarness):
+    """The API service resumes in the background and reports it via status."""
+
+    def test_service_reports_resuming_then_idle(self):
+        from api.service import SiriAgentService
+
+        first = self._builder(crash_weather_once=True)
+        with self.assertRaises(RuntimeError):
+            self._run(first, "siri_user", "Weather in Tokyo?")
+
+        gate = threading.Event()
+        restarted = self._builder(crash_weather_once=True, weather_gate=gate)
+        learned = []
+        service = SiriAgentService(
+            default_user_id="siri_user",
+            memory_store=object(),
+            learning_service=type("L", (), {"submit_completed_turn": lambda _self, m: learned.append(m)})(),
+            builder=restarted,
+        )
+        service.initialize()  # returns at once; the resume runs in a thread
+
+        self.assertEqual(service.get_chat_status("siri_user")["status"], "resuming")
+        self.assertEqual(service.get_chat_status("siri_user")["node"], "weather")
+
+        gate.set()
+        for _ in range(100):
+            if not service.is_resuming("siri_user"):
+                break
+            threading.Event().wait(0.05)
+
+        self.assertEqual(service.get_chat_status("siri_user")["status"], "idle")
+        self.assertEqual(restarted.chat_history.recent("siri_user")[-1]["content"], "Answer: 18°C and sunny")
+        self.assertEqual(len(learned), 1)
 
 
 class ChatHistoryTests(unittest.TestCase):

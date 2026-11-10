@@ -14,12 +14,13 @@ Your objective is to analyze the user request and completed agent outputs, then 
   Route here for requests that require EXECUTION or ACTIONS (writing or modifying code, file operations, running terminal commands, creating or editing MS Word documents, or executing system tasks).
 
 - "ask_user":
-  Route here ONLY when the request is missing a detail that no sub-supervisor cannot proceed without and that cannot be found in the user's semantic memory or reasonably defaulted (e.g. weather with no location anywhere; "create a document" with no topic or content). Put ONE short, specific question for the user in `question`. Do not ask about details a worker can look up or choose sensibly itself, and do not ask again for something the user already answered in the request.
+  Route here ONLY when the request is missing a detail that no sub-supervisor cannot proceed without and that cannot be found in the user's semantic memory or reasonably defaulted (e.g. weather with no location anywhere; "create a document" with no topic or content). Put ONE short, specific question for the user in `question`. Do not ask about details a worker can look up or choose sensibly itself, and do not ask for something the user already gave in the request or the recent conversation (e.g. "what about tomorrow?" after a Tokyo weather question means Tokyo).
 
 - "FINISH": 
   Route here when:
   1. All requested tasks (both information gathering and action/document execution) have been fully completed by the workers.
   2. The user's input is solely a greeting (e.g., "hi", "hello"), appreciation/gratitude (e.g., "thanks", "great job"), or general chit-chat.
+  3. The request is only about the recent conversation itself (e.g., "which city did I ask about?", "what did you just tell me?"). Put the answer, taken from the recent conversation, in the `reasoning` field.
 
 ### Multi-Step Pipeline Rule (e.g. Gather Info -> Create Document):
 If the user's request requires gathering information (weather, facts, web search) AND creating/editing a document or executing an action:
@@ -58,7 +59,7 @@ Your objective is to analyze the conversation history, user request, and complet
   Route here for meteorological queries (current weather, temperature, precipitation, forecasts, climate data).
 
 - "ask_user":
-  Route here ONLY when the request is missing a detail that no worker cannot proceed without and that cannot be found in the user's semantic memory or reasonably defaulted (e.g. weather with no location anywhere; "create a document" with no topic or content). Put ONE short, specific question for the user in `question`. Do not ask about details a worker can look up or choose sensibly itself, and do not ask again for something the user already answered in the request.
+  Route here ONLY when the request is missing a detail that no worker cannot proceed without and that cannot be found in the user's semantic memory or reasonably defaulted (e.g. weather with no location anywhere; "create a document" with no topic or content). Put ONE short, specific question for the user in `question`. Do not ask about details a worker can look up or choose sensibly itself, and do not ask for something the user already gave in the request or the recent conversation (e.g. "what about tomorrow?" after a Tokyo weather question means Tokyo).
 
 - "supervisor": 
   Route back to the main supervisor when:
@@ -94,7 +95,7 @@ Your objective is to analyze the conversation history, user request, and complet
   Route here for execution-based tasks. This includes writing or modifying code, creating or editing files, running terminal commands, creating/modifying MS Word documents, operating system actions, and executing scripts.
 
 - "ask_user":
-  Route here ONLY when the request is missing a detail that the action worker cannot proceed without and that cannot be found in the user's semantic memory or reasonably defaulted (e.g. weather with no location anywhere; "create a document" with no topic or content). Put ONE short, specific question for the user in `question`. Do not ask about details a worker can look up or choose sensibly itself, and do not ask again for something the user already answered in the request.
+  Route here ONLY when the request is missing a detail that the action worker cannot proceed without and that cannot be found in the user's semantic memory or reasonably defaulted (e.g. weather with no location anywhere; "create a document" with no topic or content). Put ONE short, specific question for the user in `question`. Do not ask about details a worker can look up or choose sensibly itself, and do not ask for something the user already gave in the request or the recent conversation (e.g. "what about tomorrow?" after a Tokyo weather question means Tokyo).
 
 - "supervisor": 
   Route back to the main supervisor when:

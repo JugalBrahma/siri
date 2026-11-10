@@ -182,6 +182,21 @@ class TestActionSupervisor(unittest.TestCase):
         self.assertEqual(cmd.update["main_supervisor"]["agent_outputs"]["sub_actionsupervisor"], "unclear")
 
 
+class TestRecentHistory(unittest.TestCase):
+    def test_supervisor_request_includes_recent_conversation(self):
+        state = create_turn_state(
+            [{"role": "user", "content": "what about tomorrow?"}],
+            MEMORY,
+            "User: Weather in Tokyo?\nSiri: 18°C",
+        )
+        llm, structured = _fake_llm({"next": "sub_infosupervisor", "reasoning": "weather"})
+        with patch.object(sup, "llm", llm):
+            sup.superVisorAgent(state)
+        request = structured.invoke.call_args.args[0][1]["content"]
+        self.assertIn("User: Weather in Tokyo?\nSiri: 18°C", request)
+        self.assertTrue(request.endswith("Current request: what about tomorrow?"))
+
+
 class TestSupervisorAsksUser(unittest.TestCase):
     """Each supervisor can pause for the user via the ask_user node."""
 

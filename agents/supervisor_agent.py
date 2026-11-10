@@ -12,6 +12,7 @@ from state.message_state import (
     record_agent_output,
     semantic_memory_prompt,
     set_routing_plan,
+    with_recent_history,
 )
 from .prompt import system_prompt, sub_info_supervisor_prompt, sub_action_supervisor_prompt
 from models.models import llm
@@ -104,7 +105,7 @@ def format_agent_outputs_prompt(agent_outputs: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
-def _llm_decide(base_prompt: str, scope: dict, user_text: str, schema, label: str) -> tuple:
+def _llm_decide(base_prompt: str, scope: dict, user_text: str, schema, label: str, recent_history: str = "") -> tuple:
     """Ask the LLM for a routing decision and return (next, reasoning).
 
     The system prompt is the supervisor's own prompt plus the shared semantic
@@ -121,7 +122,8 @@ def _llm_decide(base_prompt: str, scope: dict, user_text: str, schema, label: st
         },
         {
             "role": "user",
-            "content": f"User Request: {user_text}",
+            "content": f"User Request: {user_text}" if not recent_history.strip()
+            else with_recent_history(user_text, recent_history),
         },
     ]
     response = llm.with_structured_output(schema).invoke(messages)
@@ -190,6 +192,7 @@ def superVisorAgent(state: State) -> Command[Literal['sub_infosupervisor', 'sub_
     if goto is None:
         goto, reasoning, question = _llm_decide(
             system_prompt, main_state, user_text, MainSupervisorDecision, "Main Supervisor",
+            state.get("recent_history") or "",
         )
 
     # --- Re-routing Guard: Never re-route to an already completed sub-supervisor ---
@@ -265,6 +268,7 @@ def sub_infoSuperVisorAgent(state: State) -> Command[Literal['researcher', 'weat
     if goto is None:
         goto, reasoning, question = _llm_decide(
             sub_info_supervisor_prompt, info_state, user_text, InfoSupervisorDecision, "Sub-Info",
+            state.get("recent_history") or "",
         )
 
     # --- Guard: Never re-route to an already completed worker ---
@@ -310,6 +314,7 @@ def sub_actionSuperVisorAgent(state: State) -> Command[Literal['action', 'ask_us
 
     goto, reasoning, question = _llm_decide(
         sub_action_supervisor_prompt, action_state, user_text, ActionSupervisorDecision, "Sub-Action",
+        state.get("recent_history") or "",
     )
 
     # --- Guard: Never re-route to action worker if already completed ---
