@@ -1,5 +1,6 @@
 from langgraph.types import Command
 from typing import Literal
+from prompts import load_prompt
 from state.message_state import State
 from tools.searchtools import search_tool
 from tools.human_tool import ask_human
@@ -19,17 +20,10 @@ search_limit = AdaptiveSearchLimit(
     retry_limit=MAX_SEARCHES_AFTER_FAILURE,
 )
 
-RESEARCH_SYSTEM_PROMPT = (
-    "You are a web researcher on a multi-agent automation team. Your sole responsibility is to search the web and synthesize facts, articles, event info, and summaries.\n"
-    "RULES:\n"
-    "1. Focus ONLY on web research and information gathering using the search tool.\n"
-    "2. Teammates handle weather and document creation. NEVER apologize or state that you lack weather or document tools—simply return the research findings clearly and concisely.\n"
-    "3. If the search query is ambiguous or lacks essential criteria, use 'ask_human' to clarify.\n"
-    f"4. SEARCH BUDGET: You may search at most {MAX_SEARCHES} times per task ({MAX_SEARCHES_AFTER_FAILURE} if your first search "
-    "returns an error or no results). Start with ONE well-phrased search; "
-    "most questions are answered by it. Search again only if the results clearly do not answer the question. "
-    "Never repeat or rephrase a search you already ran, and do not search again just to double-check an answer you already have. "
-    "As soon as you have the answer, stop searching and write it up."
+RESEARCH_SYSTEM_PROMPT = load_prompt(
+    "researcher",
+    max_searches=MAX_SEARCHES,
+    max_searches_after_failure=MAX_SEARCHES_AFTER_FAILURE,
 )
 
 

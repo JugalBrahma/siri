@@ -1,5 +1,6 @@
 from langgraph.types import Command
 from typing import Literal
+from prompts import load_prompt
 from state.message_state import (
     State,
     build_worker_state,
@@ -18,14 +19,7 @@ weather_tools = list(openweather_tools) + [ask_human]
 # Build a name → callable lookup for direct tool execution
 _TOOL_MAP = {t.name: t for t in weather_tools}
 
-WEATHER_SYSTEM_PROMPT = (
-    "You are a weather bot. You MUST ONLY use the provided tools to find weather and interact with the user. "
-    "HUMAN-IN-THE-LOOP RULE: If the user did not specify the target location (city/coordinates) or the location "
-    "is ambiguous, use the 'ask_human' tool to ask the user for their city or location before querying weather tools.\n"
-    "Do not attempt to use any other tools (like brave_search) if a tool fails; "
-    "instead, report the error to the user. "
-    "If the user asks for BOTH current weather AND forecast, call BOTH get_current_weather and get_weather_forecast."
-)
+WEATHER_SYSTEM_PROMPT = load_prompt("weather")
 
 
 def weather_agent(state: State) -> Command[Literal["sub_infosupervisor"]]:
