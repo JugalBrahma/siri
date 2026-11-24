@@ -1,61 +1,114 @@
 import os
 import subprocess
 import sys
-from typing import Literal
+from typing import Dict, List, Literal, Optional
 from langchain.tools import tool
+from langgraph.errors import GraphInterrupt
+from langgraph.types import interrupt
+
+from tools.human_tool import human_answer_text
+from tools import macos_windows
+from tools.screen_target import set_target_app
 
 # ---------------------------------------------------------
-# 1. Open an approved application (fixed list, no shell)
+# 1. Open any installed application, with the user's permission (no shell)
 # ---------------------------------------------------------
-# Friendly name -> (macOS app name, Windows executable, Linux command).
-# Add new apps here; the model can never open anything outside this table.
-ALLOWED_APPS = {
-    "chrome": ("Google Chrome", "chrome", "google-chrome"),
-    "safari": ("Safari", None, None),
-    "firefox": ("Firefox", "firefox", "firefox"),
-    "word": ("Microsoft Word", "winword", None),
-    "excel": ("Microsoft Excel", "excel", None),
-    "powerpoint": ("Microsoft PowerPoint", "powerpnt", None),
-    "vscode": ("Visual Studio Code", "code", "code"),
-    "notes": ("Notes", None, None),
-    "calculator": ("Calculator", "calc", "gnome-calculator"),
-    "terminal": ("Terminal", "cmd", "gnome-terminal"),
-}
-
-AppName = Literal[
-    "chrome", "safari", "firefox", "word", "excel", "powerpoint",
-    "vscode", "notes", "calculator", "terminal",
+# Folders scanned for installed macOS apps.
+APP_DIRS = [
+    "/Applications",
+    "/Applications/Utilities",
+    "/System/Applications",
+    "/System/Applications/Utilities",
+    os.path.expanduser("~/Applications"),
 ]
 
 
-@tool
-def open_app(app: AppName) -> str:
-    """
-    Opens one of the approved desktop applications by name.
-    Allowed apps: chrome, safari, firefox, word, excel, powerpoint, vscode,
-    notes, calculator, terminal. No other apps or commands can be run.
-    """
-    entry = ALLOWED_APPS.get(str(app).strip().lower())
-    if entry is None:
-        return f"'{app}' is not an allowed app. Allowed: {', '.join(ALLOWED_APPS)}"
+def installed_apps() -> Dict[str, str]:
+    """Return {lowercase name: real app name} for every installed .app bundle."""
+    apps: Dict[str, str] = {}
+    for folder in APP_DIRS:
+        try:
+            entries = os.listdir(folder)
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.endswith(".app"):
+                name = entry[:-4]
+                apps.setdefault(name.lower(), name)
+    if os.path.isdir("/System/Library/CoreServices/Finder.app"):
+        apps.setdefault("finder", "Finder")
+    return apps
 
-    mac_name, win_cmd, linux_cmd = entry
+
+def _normalize(name: str) -> str:
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def _find_installed(app: str, apps: Dict[str, str]) -> Optional[str]:
+    """Match a requested name to an installed app ('pages' -> 'Pages Creator Studio')."""
+    wanted = _normalize(app)
+    if not wanted:
+        return None
+    by_norm = {_normalize(lower): real for lower, real in apps.items()}
+    if wanted in by_norm:
+        return by_norm[wanted]
+    matches = [real for norm, real in by_norm.items() if wanted in norm]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _confirm_open(app_name: str) -> bool:
+    """Pause the graph and ask the user before opening an app."""
+    answer = human_answer_text(interrupt({
+        "type": "ask_human",
+        "question": f"Siri wants to open '{app_name}'. Allow? (yes/no)",
+    }))
+    return answer.strip().lower() in {"y", "yes", "ok", "okay", "sure", "allow", "yeah", "yep"}
+
+
+def _launch(argv: List[str], label: str) -> str:
+    # List form, no shell=True: nothing the model says is run as a command.
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=15)
+    if result.returncode != 0:
+        return f"Could not open {label}: {result.stderr.strip() or 'unknown error'}"
+    return f"Opened {label}."
+
+
+@tool
+def list_apps() -> str:
+    """
+    Lists every application installed on this Mac. Use it to check an app's
+    exact name before calling open_app, or when the user asks what apps exist.
+    """
+    if sys.platform != "darwin":
+        return "Listing apps is only supported on macOS."
+    names = sorted(installed_apps().values(), key=str.lower)
+    return f"{len(names)} installed apps: " + ", ".join(names)
+
+
+@tool
+def open_app(app: str) -> str:
+    """
+    Opens any installed application on this Mac by name (e.g. "Safari",
+    "Pages", "WhatsApp"). The user is always asked for permission first.
+    Use list_apps to see what is installed. Only launches apps; never runs commands.
+    """
+    if sys.platform != "darwin":
+        return "Opening apps is only supported on macOS."
     try:
-        if sys.platform == "darwin":
-            argv = ["open", "-a", mac_name]
-        elif sys.platform == "win32":
-            if not win_cmd:
-                return f"'{app}' is not available on Windows."
-            argv = ["cmd", "/c", "start", "", win_cmd]
-        else:
-            if not linux_cmd:
-                return f"'{app}' is not available on Linux."
-            argv = [linux_cmd]
-        # List form, no shell=True: the model supplies only the app key.
-        result = subprocess.run(argv, capture_output=True, text=True, timeout=15)
-        if result.returncode != 0:
-            return f"Could not open {app}: {result.stderr.strip() or 'unknown error'}"
-        return f"Opened {app}."
+        real_name = _find_installed(app, installed_apps())
+        if real_name is None:
+            return f"'{app}' is not installed. Call list_apps to see installed apps."
+        if macos_windows.is_running(real_name) and macos_windows.focus_app(real_name):
+            set_target_app(real_name)  # already open: nothing to launch, so no question
+            return f"{real_name} was already open; brought it to the front."
+        if not _confirm_open(real_name):
+            return f"The user declined to open {real_name}."
+        result = _launch(["open", "-a", real_name], real_name)
+        if result.startswith("Opened"):
+            set_target_app(real_name)  # a screen task now works in this app
+        return result
+    except GraphInterrupt:
+        raise  # let the permission question reach the user
     except Exception as e:
         return f"Failed to open {app}: {str(e)}"
 
@@ -122,4 +175,4 @@ def modify_file(file_path: str, content: str, mode: Literal["overwrite", "append
 # ---------------------------------------------------------
 # Exported terminal & file action tools
 # ---------------------------------------------------------
-terminal_tools = [open_app, read_file, modify_file]
+terminal_tools = [open_app, list_apps, read_file, modify_file]

@@ -54,6 +54,26 @@ llm = ChatOpenAI(
     temperature=0,
 )
 
+# Reasoning LLM — thinks before deciding. Used by the decision makers on the
+# action side (sub_actionsupervisor and screen_reader); workers that only
+# carry out steps keep the fast `llm`. Override with REASONING_MODEL and
+# REASONING_EFFORT (low | medium | high). Reasoning models ignore temperature.
+reasoning_llm = ChatOpenAI(
+    model=os.getenv("REASONING_MODEL", "openai/gpt-6-luna"),
+    api_key=os.getenv("OPENROUTER_API_KEY"),
+    base_url="https://openrouter.ai/api/v1",
+    extra_body={"reasoning": {"effort": os.getenv("REASONING_EFFORT", "medium")}},
+)
+
+# Vision LLM — reads screenshots for the screen_reader agent. The main model
+# may not accept images, so this one is separate. Override with VISION_MODEL.
+vision_llm = ChatOpenAI(
+    model=os.getenv("VISION_MODEL", "openai/gpt-6-luna"),
+    api_key=os.getenv("OPENROUTER_API_KEY"),
+    base_url="https://openrouter.ai/api/v1",
+    temperature=0,
+)
+
 # ==============================================================================
 # 3. GROQ (Ultra-Fast Inference) [Disabled]
 # ==============================================================================

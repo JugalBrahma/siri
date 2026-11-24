@@ -11,6 +11,15 @@ from state.message_state import (
 from models.models import llm
 
 
+def gathered_info_suffix(state: State) -> str:
+    """Research/weather results gathered earlier this turn, for an action worker's task."""
+    main_state = get_supervisor_state(state, "main_supervisor")
+    gathered = main_state["agent_outputs"].get("sub_infosupervisor", "")
+    if not gathered:
+        return ""
+    return f"\n\nGathered Information / Research Content from previous step:\n{gathered}"
+
+
 def run_worker(
     state: State,
     *,

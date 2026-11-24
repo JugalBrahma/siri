@@ -7,7 +7,8 @@ from graph_builder.graph import GraphBuilder, open_sqlite_checkpointer, pending_
 from agents.supervisor_agent import superVisorAgent,sub_actionSuperVisorAgent,sub_infoSuperVisorAgent
 from agents.research_agent import research_agent
 from agents.weather_agent import weather_agent
-from agents.actionagent import action_agent
+from agents.document_writer import document_writer_agent
+from agents.screen_agents import action_taker_agent, screen_reader_agent
 from agents.guardrail_agent import guardrail_agent
 from agents.output_sanitizer import output_sanitizer_agent
 from langgraph.types import Command
@@ -48,7 +49,9 @@ def create_builder(enable_learning: bool = True, persist: bool = True):
         supervisor=superVisorAgent,
         sub_actionsupervisor=sub_actionSuperVisorAgent,
         sub_infosupervisor=sub_infoSuperVisorAgent,
-        action=action_agent,
+        document_writer=document_writer_agent,
+        screen_reader=screen_reader_agent,
+        action_taker=action_taker_agent,
         researcher=research_agent,
         weather=weather_agent,
         output_sanitizer=output_sanitizer_agent,

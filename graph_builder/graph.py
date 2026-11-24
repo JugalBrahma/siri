@@ -26,6 +26,18 @@ LOGGER = logging.getLogger("siri.graph")
 # loses at most the node that was running.
 DURABILITY = "sync"
 
+# Most nodes one run may execute before LangGraph stops it. A normal turn uses
+# about 10; a full screen task (6 rounds of screen_reader + action_taker) about
+# 25. This only stops a runaway loop. A resume after a question starts a new run.
+GRAPH_STEP_LIMIT = 60
+
+
+def _run_config(config: Optional[RunnableConfig]) -> RunnableConfig:
+    """The caller's config (or the default thread) with the step limit added."""
+    run_config: RunnableConfig = dict(config or {"configurable": {"thread_id": "default_thread"}})
+    run_config.setdefault("recursion_limit", GRAPH_STEP_LIMIT)
+    return run_config
+
 
 def open_sqlite_checkpointer(db_path: str | Path):
     """A LangGraph checkpointer backed by a local SQLite file."""
@@ -61,7 +73,9 @@ class GraphBuilder:
         sub_actionsupervisor,
         researcher,
         weather,
-        action,
+        document_writer,
+        screen_reader,
+        action_taker,
         guardrail,
         output_sanitizer,
         memory_store=None,
@@ -76,7 +90,9 @@ class GraphBuilder:
         self.sub_actionsupervisor = sub_actionsupervisor
         self.researcher = researcher
         self.weather = weather
-        self.action = action
+        self.document_writer = document_writer
+        self.screen_reader = screen_reader
+        self.action_taker = action_taker
         self.guardrail = guardrail
         self.output_sanitizer = output_sanitizer
         # Supervisor human-in-the-loop: pauses for the user's answer.
@@ -103,7 +119,9 @@ class GraphBuilder:
         graph.add_node("supervisor", self.supervisor)
         graph.add_node("sub_infosupervisor", self.sub_infosupervisor)
         graph.add_node("sub_actionsupervisor", self.sub_actionsupervisor)
-        graph.add_node("action", self.action)
+        graph.add_node("document_writer", self.document_writer)
+        graph.add_node("screen_reader", self.screen_reader)
+        graph.add_node("action_taker", self.action_taker)
         graph.add_node("researcher", self.researcher)
         graph.add_node("weather", self.weather)
         graph.add_node("output_sanitizer", self.output_sanitizer)
@@ -113,7 +131,9 @@ class GraphBuilder:
 
         graph.add_edge("researcher", "sub_infosupervisor")
         graph.add_edge("weather", "sub_infosupervisor")
-        graph.add_edge("action", "sub_actionsupervisor")
+        graph.add_edge("document_writer", "sub_actionsupervisor")
+        # screen_reader routes itself (action_taker / ask_user / sub_actionsupervisor).
+        graph.add_edge("action_taker", "screen_reader")
         graph.add_edge("output_sanitizer", END)
         self.graph = graph.compile(checkpointer=self.checkpointer)
         return self.graph
@@ -174,8 +194,7 @@ class GraphBuilder:
         """
         graph = self._ensure_graph()
         
-        turn_config: RunnableConfig = config or {"configurable": {"thread_id": "default_thread"}}
-        return graph.invoke(self.create_turn_state(messages), config=turn_config, durability=DURABILITY)
+        return graph.invoke(self.create_turn_state(messages), config=_run_config(config), durability=DURABILITY)
 
     def stream(
         self,
@@ -195,8 +214,7 @@ class GraphBuilder:
         """
         graph = self._ensure_graph()
         
-        turn_config: RunnableConfig = config or {"configurable": {"thread_id": "default_thread"}}
-        return graph.stream(input_data, config=turn_config, stream_mode=stream_mode, durability=DURABILITY)
+        return graph.stream(input_data, config=_run_config(config), stream_mode=stream_mode, durability=DURABILITY)
 
     def get_state(self, config: Optional[RunnableConfig] = None):
         """Get the current graph state for the given configuration."""
@@ -229,7 +247,7 @@ class GraphBuilder:
             past, new_messages = new_messages[:-1], new_messages[-1:]
         return self.create_turn_state(new_messages, format_recent_history(past, self.history_turns))
 
-    def complete_turn(self, thread_id: str, messages: list) -> list:
+    def complete_turn(self, thread_id: str, messages: list, meta: Optional[dict] = None) -> list:
         """Save a finished turn to chat history and delete its checkpoint.
 
         Returns only this turn's messages (from the latest user message on),
@@ -242,7 +260,7 @@ class GraphBuilder:
             content = last.get("content", "") if isinstance(last, Mapping) else getattr(last, "content", "")
             answer = message_text(content)
             if question and answer:
-                self.chat_history.add_turn(thread_id, question, answer)
+                self.chat_history.add_turn(thread_id, question, answer, meta)
         self.checkpointer.delete_thread(thread_id)
         return turn
 

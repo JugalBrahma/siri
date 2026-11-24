@@ -92,7 +92,7 @@ export interface SSEStartEvent {
 export interface SSENodeUpdateEvent {
   event: 'node_update';
   hop: number;
-  next: 'guardrail' | 'supervisor' | 'sub_infosupervisor' | 'sub_actionsupervisor' | 'weather' | 'researcher' | 'action' | 'output_sanitizer' | string;
+  next: 'guardrail' | 'supervisor' | 'sub_infosupervisor' | 'sub_actionsupervisor' | 'weather' | 'researcher' | 'document_writer' | 'screen_reader' | 'action_taker' | 'output_sanitizer' | string;
 }
 
 export interface SSEInterruptEvent {

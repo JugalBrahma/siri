@@ -1,6 +1,6 @@
 # Siri
 
-A multi-agent AI assistant. You ask it something in plain language, and a team of specialised agents works out what to do: look up the weather, search the web, create a Word document, read or write a file, open an app. It remembers things about you between sessions.
+A multi-agent AI assistant. You ask it something in plain language, and a team of specialised agents works out what to do: look up the weather, search the web, create a Word document, read or write a file, open an app, or operate an app on screen (like sending a WhatsApp message). It remembers things about you between sessions.
 
 Built with [LangGraph](https://langchain-ai.github.io/langgraph/) and LangChain. It runs as a terminal app or as a FastAPI backend.
 
@@ -12,7 +12,8 @@ Built with [LangGraph](https://langchain-ai.github.io/langgraph/) and LangChain.
 | **Web research** | "Find recent news about solid-state batteries" (Tavily search through MCP) |
 | **Word documents** | "Create a report on X", add headings, paragraphs and tables, open the file |
 | **Files** | Read, overwrite or append to files inside a fixed workspace folder |
-| **Open apps** | Chrome, Safari, Firefox, Word, Excel, PowerPoint, VS Code, Notes, Calculator, Terminal |
+| **Open apps** | Any app installed on your Mac. It asks your permission each time |
+| **Use apps on screen** | "Send 'hi' to Rahul on WhatsApp": it looks at the screen, types and clicks, and asks before sending (macOS) |
 | **Multi-step tasks** | "Get the weather in Paris and write it into a Word document" |
 | **Asks when unsure** | If a detail is missing (a city, a file name), it pauses and asks you, then carries on |
 | **Long-term memory** | Learns facts about you from conversations and uses them in later chats |
@@ -24,7 +25,8 @@ Each request goes through a graph of agents:
 ```
 guardrail → supervisor ─┬→ sub_infosupervisor ─┬→ researcher (web search)
                         │                      └→ weather
-                        ├→ sub_actionsupervisor ──→ action (files, Word, apps)
+                        ├→ sub_actionsupervisor ─┬→ document_writer (files, Word)
+                        │                        └→ screen_reader ⇄ action_taker (apps on screen)
                         ├→ ask_user (pauses to ask you a question)
                         └→ FINISH
                                   ↓
@@ -34,6 +36,7 @@ guardrail → supervisor ─┬→ sub_infosupervisor ─┬→ researcher (web 
 - **guardrail** blocks jailbreaks and dangerous requests (NeMo Guardrails). It also answers plain greetings.
 - **supervisor** decides whether the request needs information, an action, both, or a question back to you.
 - **sub-supervisors** pick the right worker. Information goes first, then the action worker uses it.
+- **screen_reader** opens apps and reads the screen from screenshots; **action_taker** types, presses keys and clicks. They take turns until the task is done (at most 6 rounds), and anything that sends or deletes is confirmed with you first.
 - **output_sanitizer** cleans the final reply and redacts secrets.
 
 Every node's progress is checkpointed to SQLite. If the app crashes or you close it mid-turn, the next start finishes that turn. Chat history is stored in the same database.
@@ -47,9 +50,10 @@ Siri keeps semantic memory per user. After a turn, a background step distills wh
 ```
 main.py             Terminal entry point
 api/                FastAPI backend (chat, streaming, resume, history, memory)
-agents/             Guardrail, supervisors, research, weather, action, sanitizer
+prompts/            Every LLM prompt, one editable .md file each
+agents/             Guardrail, supervisors, research, weather, document writer, screen agents, sanitizer
 graph_builder/      LangGraph graph and SQLite checkpointer
-tools/              Weather, search, files/apps, Word, ask_human
+tools/              Weather, search, files/apps, Word, screen and keyboard, ask_human
 memory/             Semantic memory, distillation, chat history
 mcp_server/         Standalone Tavily MCP server
 config/             Env loading, NeMo Guardrails config
@@ -74,6 +78,7 @@ cp .env.example .env     # then fill in your keys
 | Variable | Needed for |
 |---|---|
 | `OPENROUTER_API_KEY` | The language model (required). Uses OpenRouter. |
+| `VISION_MODEL` | OpenRouter model that reads screenshots (default `openai/gpt-6-luna`) |
 | `TAVILY_API_KEY` | Web search |
 | `OPENWEATHER_API_KEY` | Weather |
 | `OPENAI_API_KEY`, `PINECONE_API_KEY`, `PINECONE_INDEX_NAME` | Long-term memory (optional, all required together) |
@@ -83,6 +88,8 @@ cp .env.example .env     # then fill in your keys
 | `LOG_LEVEL` | Logging level (default `INFO`) |
 
 `.env.example` also lists Groq and Pinecone region settings.
+
+**Screen control (macOS):** in System Settings → Privacy & Security, allow your terminal (or VS Code) under **Screen Recording** and **Accessibility**. Without them screenshots come back empty and typing or clicking does nothing. Moving the mouse into a screen corner stops it immediately.
 
 ## Running
 

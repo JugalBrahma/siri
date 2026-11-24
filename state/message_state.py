@@ -31,6 +31,23 @@ class SupervisorState(TypedDict):
     semantic_memory: str
 
 
+class ScreenTask(TypedDict):
+    """Hand-off between screen_reader and action_taker during one screen task."""
+
+    instruction: str       # what screen_reader asked action_taker to do
+    report: str            # what action_taker says it did
+    rounds: int            # screen_reader -> action_taker hand-offs so far
+    confirm_question: str  # the question waiting for the user's answer
+    approved: bool         # the user said yes; holds for the rest of this task
+    app: str               # the app this task works in (opened by open_app)
+    toggled: List[str]     # on/off buttons already clicked (each only once per task)
+
+
+def new_screen_task() -> ScreenTask:
+    return {"instruction": "", "report": "", "rounds": 0,
+            "confirm_question": "", "approved": False, "app": "", "toggled": []}
+
+
 class State(TypedDict):
     """Top-level LangGraph state.
 
@@ -49,6 +66,8 @@ class State(TypedDict):
     action_supervisor: SupervisorState
     # Set by a supervisor that chose "ask_user": {"question", "return_to"}.
     clarification: Optional[Dict[str, str]]
+    # Only while screen_reader and action_taker are working; None otherwise.
+    screen: Optional[ScreenTask]
 
 
 def new_supervisor_state(
@@ -227,6 +246,7 @@ def create_turn_state(
         "info_supervisor": new_supervisor_state(),
         "action_supervisor": new_supervisor_state(),
         "clarification": None,
+        "screen": None,
     }
 
 
@@ -242,7 +262,18 @@ class InfoSupervisorDecision(BaseModel):
     question: str = ""
 
 
+class ScreenDecision(BaseModel):
+    """screen_reader's choice after looking at the screen."""
+
+    next: Literal["action_taker", "ask_user", "done"]
+    instruction: str = ""     # for action_taker: the exact steps to perform
+    risky: bool = False       # the steps send, post, like, submit, delete, buy or sign in
+    requested: bool = False   # the user's request asks for exactly this, so no need to ask
+    question: str = ""        # for ask_user: a missing detail, or approval for something not requested
+    summary: str = ""         # for done: what was achieved, or why it stopped
+
+
 class ActionSupervisorDecision(BaseModel):
     reasoning: str
-    next: Literal["action", "ask_user", "supervisor"]
+    next: Literal["document_writer", "screen_reader", "ask_user", "supervisor"]
     question: str = ""

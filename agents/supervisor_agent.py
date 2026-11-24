@@ -14,8 +14,12 @@ from state.message_state import (
     set_routing_plan,
     with_recent_history,
 )
-from .prompt import system_prompt, sub_info_supervisor_prompt, sub_action_supervisor_prompt
-from models.models import llm
+from prompts import load_prompt
+from models.models import llm, reasoning_llm
+
+MAIN_SUPERVISOR_PROMPT = load_prompt("main_supervisor")
+INFO_SUPERVISOR_PROMPT = load_prompt("info_supervisor")
+ACTION_SUPERVISOR_PROMPT = load_prompt("action_supervisor")
 
 # ---------------------------------------------------------------------------
 # Fast-path keyword detection
@@ -30,7 +34,8 @@ _INFO_KEYWORDS = re.compile(
 # Patterns that indicate the user also needs an action/execution.
 _ACTION_KEYWORDS = re.compile(
     r"\b(create|write|make|generate|build|edit|modify|delete|remove|run|execute|"
-    r"save|open|file|document|docx|code|script|terminal|command|install)\b",
+    r"save|open|file|document|docx|code|script|terminal|command|install|"
+    r"send|type|click|press|whatsapp)\b",
     re.IGNORECASE,
 )
 # Patterns that indicate weather specifically (for sub-info fast-path).
@@ -105,7 +110,8 @@ def format_agent_outputs_prompt(agent_outputs: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
-def _llm_decide(base_prompt: str, scope: dict, user_text: str, schema, label: str, recent_history: str = "") -> tuple:
+def _llm_decide(base_prompt: str, scope: dict, user_text: str, schema, label: str, recent_history: str = "",
+                model=None, method: str | None = None) -> tuple:
     """Ask the LLM for a routing decision and return (next, reasoning).
 
     The system prompt is the supervisor's own prompt plus the shared semantic
@@ -126,7 +132,8 @@ def _llm_decide(base_prompt: str, scope: dict, user_text: str, schema, label: st
             else with_recent_history(user_text, recent_history),
         },
     ]
-    response = llm.with_structured_output(schema).invoke(messages)
+    options = {"method": method} if method else {}
+    response = (model or llm).with_structured_output(schema, **options).invoke(messages)
 
     if isinstance(response, dict):
         goto = response.get("next")
@@ -191,7 +198,7 @@ def superVisorAgent(state: State) -> Command[Literal['sub_infosupervisor', 'sub_
     # --- Fall through to LLM routing if fast-path didn't match ---
     if goto is None:
         goto, reasoning, question = _llm_decide(
-            system_prompt, main_state, user_text, MainSupervisorDecision, "Main Supervisor",
+            MAIN_SUPERVISOR_PROMPT, main_state, user_text, MainSupervisorDecision, "Main Supervisor",
             state.get("recent_history") or "",
         )
 
@@ -267,7 +274,7 @@ def sub_infoSuperVisorAgent(state: State) -> Command[Literal['researcher', 'weat
     # --- Fall through to LLM routing if fast-path didn't match ---
     if goto is None:
         goto, reasoning, question = _llm_decide(
-            sub_info_supervisor_prompt, info_state, user_text, InfoSupervisorDecision, "Sub-Info",
+            INFO_SUPERVISOR_PROMPT, info_state, user_text, InfoSupervisorDecision, "Sub-Info",
             state.get("recent_history") or "",
         )
 
@@ -306,15 +313,17 @@ def sub_infoSuperVisorAgent(state: State) -> Command[Literal['researcher', 'weat
 # Sub-Action Supervisor
 # ---------------------------------------------------------------------------
 
-def sub_actionSuperVisorAgent(state: State) -> Command[Literal['action', 'ask_user', 'supervisor']]:
+def sub_actionSuperVisorAgent(state: State) -> Command[Literal['document_writer', 'screen_reader', 'ask_user', 'supervisor']]:
     print("--- SUB ACTION SUPERVISOR AGENT ---")
     action_state = get_supervisor_state(state, "action_supervisor")
     routing_history = action_state.get("routing_plan", [])
     user_text = _extract_user_text(state)
 
     goto, reasoning, question = _llm_decide(
-        sub_action_supervisor_prompt, action_state, user_text, ActionSupervisorDecision, "Sub-Action",
+        ACTION_SUPERVISOR_PROMPT, action_state, user_text, ActionSupervisorDecision, "Sub-Action",
         state.get("recent_history") or "",
+        model=reasoning_llm,  # thinks first: fewer needless questions, better routing
+        method="function_calling",  # a tool call parses reliably; JSON mode can add stray text
     )
 
     # --- Guard: Never re-route to action worker if already completed ---

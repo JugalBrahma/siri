@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import agents.supervisor_agent as sup
-from agents.prompt import sub_action_supervisor_prompt, sub_info_supervisor_prompt, system_prompt
+from agents.supervisor_agent import ACTION_SUPERVISOR_PROMPT, INFO_SUPERVISOR_PROMPT, MAIN_SUPERVISOR_PROMPT
 from state.message_state import (
     ActionSupervisorDecision,
     InfoSupervisorDecision,
@@ -69,7 +69,7 @@ class TestMainSupervisor(unittest.TestCase):
         llm.with_structured_output.assert_called_once_with(MainSupervisorDecision)
         messages = structured.invoke.call_args.args[0]
         self.assertEqual(messages[0]["role"], "system")
-        self.assertTrue(messages[0]["content"].startswith(system_prompt))
+        self.assertTrue(messages[0]["content"].startswith(MAIN_SUPERVISOR_PROMPT))
         self.assertIn(MEMORY, messages[0]["content"])
         self.assertEqual(messages[1], {"role": "user", "content": "User Request: research cats and write a document"})
         self.assertEqual(cmd.goto, "sub_actionsupervisor")
@@ -132,7 +132,7 @@ class TestInfoSupervisor(unittest.TestCase):
             cmd = sup.sub_infoSuperVisorAgent(self._state("Mumbai today"))
         llm.with_structured_output.assert_called_once_with(InfoSupervisorDecision)
         messages = structured.invoke.call_args.args[0]
-        self.assertTrue(messages[0]["content"].startswith(sub_info_supervisor_prompt))
+        self.assertTrue(messages[0]["content"].startswith(INFO_SUPERVISOR_PROMPT))
         self.assertIn(MEMORY, messages[0]["content"])
         self.assertEqual(messages[1]["content"], "User Request: Mumbai today")
         self.assertEqual(cmd.goto, "researcher")
@@ -155,28 +155,28 @@ class TestActionSupervisor(unittest.TestCase):
         state["action_supervisor"] = new_supervisor_state(MEMORY)
         return state
 
-    def test_routes_to_action(self):
-        llm, structured = _fake_llm({"next": "action", "reasoning": "do it"})
-        with patch.object(sup, "llm", llm):
+    def test_routes_to_screen_reader(self):
+        llm, structured = _fake_llm({"next": "screen_reader", "reasoning": "do it"})
+        with patch.object(sup, "reasoning_llm", llm):
             cmd = sup.sub_actionSuperVisorAgent(self._state("open safari"))
-        llm.with_structured_output.assert_called_once_with(ActionSupervisorDecision)
+        llm.with_structured_output.assert_called_once_with(ActionSupervisorDecision, method="function_calling")
         messages = structured.invoke.call_args.args[0]
-        self.assertTrue(messages[0]["content"].startswith(sub_action_supervisor_prompt))
+        self.assertTrue(messages[0]["content"].startswith(ACTION_SUPERVISOR_PROMPT))
         self.assertEqual(messages[1]["content"], "User Request: open safari")
-        self.assertEqual(cmd.goto, "action")
+        self.assertEqual(cmd.goto, "screen_reader")
 
     def test_returns_to_main_after_action(self):
         state = self._state("open safari")
-        state["action_supervisor"] = record_agent_output(state["action_supervisor"], "action", "Opened safari.")
-        llm, _ = _fake_llm({"next": "action", "reasoning": "again"})
-        with patch.object(sup, "llm", llm):
+        state["action_supervisor"] = record_agent_output(state["action_supervisor"], "screen_reader", "Opened safari.")
+        llm, _ = _fake_llm({"next": "screen_reader", "reasoning": "again"})
+        with patch.object(sup, "reasoning_llm", llm):
             cmd = sup.sub_actionSuperVisorAgent(state)
         self.assertEqual(cmd.goto, "supervisor")
         self.assertEqual(cmd.update["main_supervisor"]["agent_outputs"]["sub_actionsupervisor"], "Opened safari.")
 
     def test_missing_next_returns_reasoning(self):
         llm, _ = _fake_llm(SimpleNamespace(reasoning="unclear"))
-        with patch.object(sup, "llm", llm):
+        with patch.object(sup, "reasoning_llm", llm):
             cmd = sup.sub_actionSuperVisorAgent(self._state("open safari"))
         self.assertEqual(cmd.goto, "supervisor")
         self.assertEqual(cmd.update["main_supervisor"]["agent_outputs"]["sub_actionsupervisor"], "unclear")
@@ -225,7 +225,7 @@ class TestSupervisorAsksUser(unittest.TestCase):
         state = _turn("make something")
         state["action_supervisor"] = new_supervisor_state(MEMORY)
         llm = self._decide({"next": "ask_user", "reasoning": "Which file should I create?"})
-        with patch.object(sup, "llm", llm):
+        with patch.object(sup, "reasoning_llm", llm):
             cmd = sup.sub_actionSuperVisorAgent(state)
         self.assertEqual(cmd.goto, "ask_user")
         self.assertEqual(

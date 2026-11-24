@@ -7,7 +7,7 @@ from langchain_core.tools import tool
 
 import tools.terminal as terminal
 import tools.word_tools as word_tools_module
-from agents.actionagent import get_action_tools
+from agents.document_writer import get_document_tools
 from tools.terminal import open_app, read_file, modify_file, terminal_tools
 from tools.word_tools import (
     add_paragraph,
@@ -40,15 +40,37 @@ class TestTerminalTools(WorkspaceTestCase):
         self.assertNotIn("run_terminal_command", names)
 
     def test_open_app_rejects_unknown_app(self):
-        """Apps outside the allowed list fail validation before anything runs."""
-        with patch("subprocess.run") as run:
-            with self.assertRaises(Exception):
-                open_app.invoke({"app": "rm -rf ~"})
+        """A name that is not an installed app is refused before anything runs."""
+        with patch("tools.terminal.sys.platform", "darwin"), patch("subprocess.run") as run:
+            result = open_app.invoke({"app": "rm -rf ~"})
+        self.assertIn("not installed", result)
+        run.assert_not_called()
+
+    def test_open_app_asks_before_every_app(self):
+        """Every app needs the user's yes before it is launched."""
+        installed = {"safari": "Safari", "blender": "Blender"}
+        with patch("tools.terminal.sys.platform", "darwin"), \
+             patch("tools.terminal.installed_apps", return_value=installed), \
+             patch("tools.terminal.macos_windows.is_running", return_value=False), \
+             patch("subprocess.run") as run:
+            run.return_value.returncode = 0
+            for app in ["safari", "blender"]:
+                with patch("tools.terminal.interrupt", return_value="no") as ask:
+                    self.assertIn("declined", open_app.invoke({"app": app}))
+                ask.assert_called_once()
             run.assert_not_called()
 
+            with patch("tools.terminal.interrupt", return_value="yes"):
+                self.assertIn("Opened", open_app.invoke({"app": "blender"}))
+            self.assertEqual(run.call_args.args[0], ["open", "-a", "Blender"])
+
     def test_open_app_uses_no_shell(self):
-        """An allowed app is launched with an argument list, never a shell string."""
-        with patch("tools.terminal.sys.platform", "darwin"), patch("subprocess.run") as run:
+        """An approved app is launched with an argument list, never a shell string."""
+        with patch("tools.terminal.sys.platform", "darwin"), \
+             patch("tools.terminal.installed_apps", return_value={"safari": "Safari"}), \
+             patch("tools.terminal.macos_windows.is_running", return_value=False), \
+             patch("tools.terminal.interrupt", return_value="yes"), \
+             patch("subprocess.run") as run:
             run.return_value.returncode = 0
             result = open_app.invoke({"app": "safari"})
         self.assertIn("Opened", result)
@@ -102,19 +124,17 @@ class TestWordTools(WorkspaceTestCase):
             self.assertEqual(launch.call_count, 1)
 
 
-class TestActionAgentTools(unittest.TestCase):
-    def test_action_agent_tools_assembly(self):
-        """The action agent combines the safe base tools with the Word tools."""
+class TestDocumentWriterTools(unittest.TestCase):
+    def test_document_writer_tools_assembly(self):
+        """The document writer gets file and Word tools, but no app or screen tools."""
         @tool
         def dummy_word_tool(doc: str) -> str:
             """Dummy word tool"""
             return doc
 
-        with patch("agents.actionagent.get_word_tools", return_value=[dummy_word_tool]):
-            names = [t.name for t in get_action_tools()]
-        for expected in ["open_app", "read_file", "modify_file", "ask_human", "dummy_word_tool"]:
-            self.assertIn(expected, names)
-        self.assertNotIn("run_terminal_command", names)
+        with patch("agents.document_writer.get_word_tools", return_value=[dummy_word_tool]):
+            names = [t.name for t in get_document_tools()]
+        self.assertEqual(names, ["read_file", "modify_file", "ask_human", "dummy_word_tool"])
 
 
 if __name__ == "__main__":

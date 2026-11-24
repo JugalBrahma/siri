@@ -31,7 +31,8 @@ class TestEnsureGraph(unittest.TestCase):
     def _builder(self):
         return GraphBuilder(
             supervisor=None, sub_infosupervisor=None, sub_actionsupervisor=None,
-            researcher=None, weather=None, action=None, guardrail=None, output_sanitizer=None,
+            researcher=None, weather=None, document_writer=None, screen_reader=None, action_taker=None,
+            guardrail=None, output_sanitizer=None,
         )
 
     def test_builds_once_and_reuses(self):
