@@ -1,8 +1,8 @@
 """State contracts and helpers for the Siri LangGraph workflow.
 
 The graph state intentionally holds only supervisor-level information.  A
-worker's retry data, tool responses, and errors belong to ``WorkerState``
-created inside that worker and are never returned to LangGraph.
+worker gets its own ``WorkerState`` (its task and memory snapshot), which is
+never returned to LangGraph.
 """
 
 from typing import Annotated, Any, Dict, List, Literal, Mapping, Optional
@@ -18,9 +18,6 @@ class WorkerState(TypedDict):
 
     task: str
     semantic_memory: str
-    retry_count: int
-    latest_tool_result: Optional[str]
-    last_error: Optional[str]
 
 
 class SupervisorState(TypedDict):
@@ -70,13 +67,10 @@ class State(TypedDict):
     screen: Optional[ScreenTask]
 
 
-def new_supervisor_state(
-    semantic_memory: str = "",
-    routing_plan: Optional[List[str]] = None,
-) -> SupervisorState:
+def new_supervisor_state(semantic_memory: str = "") -> SupervisorState:
     """Create a fresh supervisor scope with an immutable-for-turn memory snapshot."""
     return {
-        "routing_plan": list(routing_plan or []),
+        "routing_plan": [],
         "agent_outputs": {},
         "semantic_memory": semantic_memory.strip(),
     }
@@ -131,17 +125,21 @@ def record_agent_output(
     }
 
 
+USER_ROLES = {"user", "human"}
+
+
+def _role_and_content(message: Any) -> tuple:
+    """(role, content) of a message given as a dict or a LangChain message."""
+    if isinstance(message, Mapping):
+        return message.get("role"), message.get("content", "")
+    return getattr(message, "type", None), getattr(message, "content", "")
+
+
 def latest_user_task(messages: List[Any]) -> str:
     """Find the latest user-authored message for a worker's local task."""
     for message in reversed(messages):
-        if isinstance(message, Mapping):
-            role = message.get("role")
-            content = message.get("content", "")
-        else:
-            role = getattr(message, "type", None)
-            content = getattr(message, "content", "")
-
-        if role in {"user", "human"} and isinstance(content, str):
+        role, content = _role_and_content(message)
+        if role in USER_ROLES and isinstance(content, str):
             return content
     return ""
 
@@ -149,9 +147,7 @@ def latest_user_task(messages: List[Any]) -> str:
 def current_turn_messages(messages: List[Any]) -> List[Any]:
     """Messages from the latest user message onward — this turn only, no history."""
     for index in range(len(messages) - 1, -1, -1):
-        message = messages[index]
-        role = message.get("role") if isinstance(message, Mapping) else getattr(message, "type", None)
-        if role in {"user", "human"}:
+        if _role_and_content(messages[index])[0] in USER_ROLES:
             return list(messages[index:])
     return list(messages)
 
@@ -161,19 +157,13 @@ HISTORY_TURNS = 2          # last 2 questions, in full
 ANSWER_CHAR_LIMIT = 300    # Siri's answers to them, cut to this many characters
 
 
-def _role_and_content(message: Any) -> tuple:
-    if isinstance(message, Mapping):
-        return message.get("role"), message.get("content", "")
-    return getattr(message, "type", None), getattr(message, "content", "")
-
-
 def format_recent_history(
     messages: List[Any],
     turns: int = HISTORY_TURNS,
     answer_chars: int = ANSWER_CHAR_LIMIT,
 ) -> str:
     """Render the last `turns` questions in full and their answers trimmed."""
-    user_indices = [i for i, m in enumerate(messages) if _role_and_content(m)[0] in {"user", "human"}]
+    user_indices = [i for i, m in enumerate(messages) if _role_and_content(m)[0] in USER_ROLES]
     if not user_indices or turns <= 0:
         return ""
 
@@ -183,7 +173,7 @@ def format_recent_history(
         text = str(content).strip()
         if not text:
             continue
-        if role in {"user", "human"}:
+        if role in USER_ROLES:
             lines.append(f"User: {text}")
         else:
             if len(text) > answer_chars:
@@ -213,9 +203,6 @@ def build_worker_state(
     return {
         "task": with_recent_history(latest_user_task(messages), str(state.get("recent_history") or "")),
         "semantic_memory": supervisor_state["semantic_memory"],
-        "retry_count": 0,
-        "latest_tool_result": None,
-        "last_error": None,
     }
 
 

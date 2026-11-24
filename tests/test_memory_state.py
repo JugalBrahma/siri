@@ -140,12 +140,10 @@ class SemanticMemoryStateTests(unittest.TestCase):
             turn["main_supervisor"]["semantic_memory"],
         )
         worker = build_worker_state(turn, "info_supervisor")
-        worker["retry_count"] = 2
-        worker["last_error"] = "tool timeout"
+        worker["task"] = "changed by the worker"
 
-        self.assertNotIn("retry_count", turn)
-        self.assertNotIn("last_error", turn)
-        self.assertNotIn("latest_tool_result", turn)
+        self.assertEqual(set(worker), {"task", "semantic_memory"})
+        self.assertEqual(turn["messages"][0]["content"], "Find Mumbai weather")
         self.assertEqual(worker["semantic_memory"], turn["info_supervisor"]["semantic_memory"])
 
 

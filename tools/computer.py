@@ -1,8 +1,8 @@
 """Screen and keyboard tools for the screen_reader / action_taker agents (macOS).
 
 ``screenshot`` is read-only: it captures the screen and lets a vision model
-answer a question about it. ``type_text``, ``press_keys``, ``click_on`` and
-``click`` change things on screen.
+answer a question about it. ``type_text``, ``press_keys`` and ``click_on``
+change things on screen.
 
 Inside a screen task (see tools/screen_target.py) every tool first brings the
 task's app to the front, so keys never land in another window, and screenshots
@@ -244,6 +244,3 @@ def click_on(target: str, double: bool = False) -> str:
     if toggle and result.startswith(("Clicked", "Double-clicked")):
         remember_toggle(toggle)
     return f"{result} ({target})"
-
-
-computer_tools = [screenshot, type_text, press_keys, click_on]

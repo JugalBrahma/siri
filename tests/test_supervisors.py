@@ -37,18 +37,18 @@ def _turn(text):
 
 class TestFastPaths(unittest.TestCase):
     def test_main_fast_path(self):
-        self.assertEqual(sup._fast_path_main("what is the weather"), "sub_infosupervisor")
-        self.assertEqual(sup._fast_path_main("create a file"), "sub_actionsupervisor")
-        self.assertIsNone(sup._fast_path_main("research cats and write a document"))
-        self.assertIsNone(sup._fast_path_main("hmm"))
-        self.assertIsNone(sup._fast_path_main(""))
+        self.assertEqual(sup._pick_by_keywords("what is the weather", *sup._MAIN_FAST_PATH), "sub_infosupervisor")
+        self.assertEqual(sup._pick_by_keywords("create a file", *sup._MAIN_FAST_PATH), "sub_actionsupervisor")
+        self.assertIsNone(sup._pick_by_keywords("research cats and write a document", *sup._MAIN_FAST_PATH))
+        self.assertIsNone(sup._pick_by_keywords("hmm", *sup._MAIN_FAST_PATH))
+        self.assertIsNone(sup._pick_by_keywords("", *sup._MAIN_FAST_PATH))
 
     def test_info_fast_path(self):
-        self.assertEqual(sup._fast_path_info("forecast for Tokyo"), "weather")
-        self.assertEqual(sup._fast_path_info("search the news"), "researcher")
-        self.assertIsNone(sup._fast_path_info("search the weather forecast"))
-        self.assertIsNone(sup._fast_path_info("Mumbai today"))
-        self.assertIsNone(sup._fast_path_info(""))
+        self.assertEqual(sup._pick_by_keywords("forecast for Tokyo", *sup._INFO_FAST_PATH), "weather")
+        self.assertEqual(sup._pick_by_keywords("search the news", *sup._INFO_FAST_PATH), "researcher")
+        self.assertIsNone(sup._pick_by_keywords("search the weather forecast", *sup._INFO_FAST_PATH))
+        self.assertIsNone(sup._pick_by_keywords("Mumbai today", *sup._INFO_FAST_PATH))
+        self.assertIsNone(sup._pick_by_keywords("", *sup._INFO_FAST_PATH))
 
 
 class TestMainSupervisor(unittest.TestCase):

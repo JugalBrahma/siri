@@ -8,6 +8,7 @@ from state.message_state import (
     MainSupervisorDecision,
     State,
     get_supervisor_state,
+    latest_user_task,
     new_supervisor_state,
     record_agent_output,
     semantic_memory_prompt,
@@ -52,17 +53,6 @@ _RESEARCH_KEYWORDS = re.compile(
 )
 
 
-def _extract_user_text(state: State) -> str:
-    """Get the latest user message text for keyword analysis."""
-    for msg in reversed(state.get("messages", [])):
-        if isinstance(msg, dict):
-            if msg.get("role") in {"user", "human"}:
-                return msg.get("content", "")
-        elif getattr(msg, "type", None) in {"user", "human"}:
-            return getattr(msg, "content", "")
-    return ""
-
-
 def _pick_by_keywords(user_text: str, first: tuple, second: tuple) -> str | None:
     """Return the destination whose keyword pattern alone matches, else None.
 
@@ -81,22 +71,8 @@ def _pick_by_keywords(user_text: str, first: tuple, second: tuple) -> str | None
     return None
 
 
-def _fast_path_main(user_text: str) -> str | None:
-    """Return a fast-path destination or None to fall through to LLM routing."""
-    return _pick_by_keywords(
-        user_text,
-        (_INFO_KEYWORDS, "sub_infosupervisor"),
-        (_ACTION_KEYWORDS, "sub_actionsupervisor"),
-    )
-
-
-def _fast_path_info(user_text: str) -> str | None:
-    """Return a fast-path worker destination or None to fall through to LLM routing."""
-    return _pick_by_keywords(
-        user_text,
-        (_WEATHER_KEYWORDS, "weather"),
-        (_RESEARCH_KEYWORDS, "researcher"),
-    )
+_MAIN_FAST_PATH = ((_INFO_KEYWORDS, "sub_infosupervisor"), (_ACTION_KEYWORDS, "sub_actionsupervisor"))
+_INFO_FAST_PATH = ((_WEATHER_KEYWORDS, "weather"), (_RESEARCH_KEYWORDS, "researcher"))
 
 
 def format_agent_outputs_prompt(agent_outputs: dict[str, str]) -> str:
@@ -161,6 +137,38 @@ def _ask_user(scope_key: str, scope_state: dict, routing_history: list, question
     )
 
 
+def _decide(state: State, scope: dict, user_text: str, fast_path: tuple, base_prompt: str,
+            schema, label: str, **model_options) -> tuple:
+    """(next, reasoning, question): a keyword fast-path on the first decision, else the LLM."""
+    if fast_path and not scope["routing_plan"] and not scope["agent_outputs"]:
+        fast = _pick_by_keywords(user_text, *fast_path)
+        if fast:
+            reasoning = f"[fast-path] keyword match → {fast}"
+            print(f"{label} Decision: {fast} (Reasoning: {reasoning})")
+            return fast, reasoning, ""
+    return _llm_decide(base_prompt, scope, user_text, schema, label,
+                       state.get("recent_history") or "", **model_options)
+
+
+def _report_to_main(state: State, name: str, scope: dict, reasoning: str) -> Command:
+    """Record a sub-supervisor's combined result with the main supervisor and go back to it."""
+    result = "\n\n".join(scope["agent_outputs"].values()) if scope["agent_outputs"] else reasoning
+    main_state = record_agent_output(get_supervisor_state(state, "main_supervisor"), name, result)
+    return Command(goto="supervisor", update={"main_supervisor": main_state, "next": "supervisor"})
+
+
+def _finish_main(main_state: dict, content: str) -> Command:
+    """Hand the final answer to output_sanitizer."""
+    return Command(
+        goto="output_sanitizer",
+        update={
+            "messages": [AIMessage(content=content, name="supervisor")],
+            "main_supervisor": set_routing_plan(main_state, main_state["routing_plan"] + ["output_sanitizer"]),
+            "next": "output_sanitizer",
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main Supervisor
 # ---------------------------------------------------------------------------
@@ -168,45 +176,24 @@ def _ask_user(scope_key: str, scope_state: dict, routing_history: list, question
 def superVisorAgent(state: State) -> Command[Literal['sub_infosupervisor', 'sub_actionsupervisor', 'ask_user', 'output_sanitizer']]:
     print("--- SUPERVISOR AGENT ---")
     main_state = get_supervisor_state(state, "main_supervisor")
-    routing_history = main_state.get("routing_plan", [])
-    user_text = _extract_user_text(state)
+    outputs = main_state["agent_outputs"]
+    routing_history = main_state["routing_plan"]
+    user_text = latest_user_task(state.get("messages", []))
 
-    # --- Fast-finish: If sub_actionsupervisor has finished, complete immediately ---
-    if "sub_actionsupervisor" in main_state["agent_outputs"]:
-        final_content = main_state["agent_outputs"]["sub_actionsupervisor"]
+    # The action side always finishes the turn.
+    if "sub_actionsupervisor" in outputs:
         print("  ↳ Fast-finish: Action execution complete. Routing to output_sanitizer.")
-        return Command(
-            goto="output_sanitizer",
-            update={
-                "messages": [AIMessage(content=final_content, name="supervisor")],
-                "main_supervisor": set_routing_plan(main_state, routing_history + ["output_sanitizer"]),
-                "next": "output_sanitizer",
-            },
-        )
+        return _finish_main(main_state, outputs["sub_actionsupervisor"])
 
-    # --- Fast-path: skip the LLM call on the very first routing decision if unambiguous ---
-    goto = None
-    reasoning = ""
-    question = ""
-    if not routing_history and not main_state["agent_outputs"]:
-        fast = _fast_path_main(user_text)
-        if fast:
-            goto = fast
-            reasoning = f"[fast-path] keyword match → {fast}"
-            print(f"Main Supervisor Decision: {goto} (Reasoning: {reasoning})")
-
-    # --- Fall through to LLM routing if fast-path didn't match ---
-    if goto is None:
-        goto, reasoning, question = _llm_decide(
-            MAIN_SUPERVISOR_PROMPT, main_state, user_text, MainSupervisorDecision, "Main Supervisor",
-            state.get("recent_history") or "",
-        )
+    goto, reasoning, question = _decide(
+        state, main_state, user_text, _MAIN_FAST_PATH,
+        MAIN_SUPERVISOR_PROMPT, MainSupervisorDecision, "Main Supervisor",
+    )
 
     # --- Re-routing Guard: Never re-route to an already completed sub-supervisor ---
-    if goto in main_state["agent_outputs"]:
+    if goto in outputs:
         print(f"  ↳ Guard: {goto} already completed [STATUS: DONE]. Checking remaining tasks.")
-        has_action = bool(_ACTION_KEYWORDS.search(user_text))
-        if goto == "sub_infosupervisor" and has_action and "sub_actionsupervisor" not in main_state["agent_outputs"]:
+        if goto == "sub_infosupervisor" and _ACTION_KEYWORDS.search(user_text):
             goto = "sub_actionsupervisor"
             reasoning = "Information gathered; proceeding to action execution."
         else:
@@ -215,38 +202,16 @@ def superVisorAgent(state: State) -> Command[Literal['sub_infosupervisor', 'sub_
 
     # --- FINISH or loop guard ---
     if goto == "FINISH" or routing_history.count(goto) >= 2 or not goto:
-        if "sub_actionsupervisor" in main_state["agent_outputs"]:
-            final_content = main_state["agent_outputs"]["sub_actionsupervisor"]
-        elif "sub_infosupervisor" in main_state["agent_outputs"]:
-            final_content = main_state["agent_outputs"]["sub_infosupervisor"]
-        elif main_state["agent_outputs"]:
-            final_content = "\n\n".join(main_state["agent_outputs"].values())
-        else:
-            final_content = reasoning
-
-        return Command(
-            goto="output_sanitizer",
-            update={
-                "messages": [AIMessage(content=final_content, name="supervisor")],
-                "main_supervisor": set_routing_plan(main_state, routing_history + ["output_sanitizer"]),
-                "next": "output_sanitizer",
-            },
-        )
+        return _finish_main(main_state, outputs.get("sub_infosupervisor") or "\n\n".join(outputs.values()) or reasoning)
 
     if goto == "ask_user":
         return _ask_user("main_supervisor", main_state, routing_history, question, reasoning, "supervisor")
 
-    updated_main_state = set_routing_plan(main_state, routing_history + [goto])
-    update = {"main_supervisor": updated_main_state, "next": goto}
+    update = {"main_supervisor": set_routing_plan(main_state, routing_history + [goto]), "next": goto}
     if goto == "sub_infosupervisor":
-        update["info_supervisor"] = new_supervisor_state(
-            main_state["semantic_memory"],
-        )
+        update["info_supervisor"] = new_supervisor_state(main_state["semantic_memory"])
     elif goto == "sub_actionsupervisor":
-        update["action_supervisor"] = new_supervisor_state(
-            main_state["semantic_memory"],
-        )
-
+        update["action_supervisor"] = new_supervisor_state(main_state["semantic_memory"])
     return Command(goto=goto, update=update)
 
 
@@ -257,26 +222,13 @@ def superVisorAgent(state: State) -> Command[Literal['sub_infosupervisor', 'sub_
 def sub_infoSuperVisorAgent(state: State) -> Command[Literal['researcher', 'weather', 'ask_user', 'supervisor']]:
     print("--- SUB INFO SUPERVISOR AGENT ---")
     info_state = get_supervisor_state(state, "info_supervisor")
-    routing_history = info_state.get("routing_plan", [])
-    user_text = _extract_user_text(state)
+    routing_history = info_state["routing_plan"]
+    user_text = latest_user_task(state.get("messages", []))
 
-    # --- Fast-path: skip the LLM call on the first routing decision ---
-    goto = None
-    reasoning = ""
-    question = ""
-    if not routing_history and not info_state["agent_outputs"]:
-        fast = _fast_path_info(user_text)
-        if fast:
-            goto = fast
-            reasoning = f"[fast-path] keyword match → {fast}"
-            print(f"Sub-Info Decision: {goto} (Reasoning: {reasoning})")
-
-    # --- Fall through to LLM routing if fast-path didn't match ---
-    if goto is None:
-        goto, reasoning, question = _llm_decide(
-            INFO_SUPERVISOR_PROMPT, info_state, user_text, InfoSupervisorDecision, "Sub-Info",
-            state.get("recent_history") or "",
-        )
+    goto, reasoning, question = _decide(
+        state, info_state, user_text, _INFO_FAST_PATH,
+        INFO_SUPERVISOR_PROMPT, InfoSupervisorDecision, "Sub-Info",
+    )
 
     # --- Guard: Never re-route to an already completed worker ---
     if goto in info_state["agent_outputs"]:
@@ -285,27 +237,14 @@ def sub_infoSuperVisorAgent(state: State) -> Command[Literal['researcher', 'weat
 
     # --- Route back to Main Supervisor when info tasks are gathered ---
     if goto == "supervisor" or routing_history.count(goto) >= 2 or not goto:
-        main_state = get_supervisor_state(state, "main_supervisor")
-        combined_result = "\n\n".join(info_state["agent_outputs"].values()) if info_state["agent_outputs"] else reasoning
-        main_state = record_agent_output(
-            main_state,
-            "sub_infosupervisor",
-            combined_result,
-        )
-
-        # Always return cleanly to main supervisor
-        return Command(
-            goto="supervisor",
-            update={"main_supervisor": main_state, "next": "supervisor"},
-        )
+        return _report_to_main(state, "sub_infosupervisor", info_state, reasoning)
 
     if goto == "ask_user":
         return _ask_user("info_supervisor", info_state, routing_history, question, reasoning, "sub_infosupervisor")
 
-    info_state = set_routing_plan(info_state, routing_history + [goto])
     return Command(
         goto=goto,
-        update={"info_supervisor": info_state, "next": goto},
+        update={"info_supervisor": set_routing_plan(info_state, routing_history + [goto]), "next": goto},
     )
 
 
@@ -316,39 +255,24 @@ def sub_infoSuperVisorAgent(state: State) -> Command[Literal['researcher', 'weat
 def sub_actionSuperVisorAgent(state: State) -> Command[Literal['document_writer', 'screen_reader', 'ask_user', 'supervisor']]:
     print("--- SUB ACTION SUPERVISOR AGENT ---")
     action_state = get_supervisor_state(state, "action_supervisor")
-    routing_history = action_state.get("routing_plan", [])
-    user_text = _extract_user_text(state)
+    routing_history = action_state["routing_plan"]
+    user_text = latest_user_task(state.get("messages", []))
 
-    goto, reasoning, question = _llm_decide(
-        ACTION_SUPERVISOR_PROMPT, action_state, user_text, ActionSupervisorDecision, "Sub-Action",
-        state.get("recent_history") or "",
+    goto, reasoning, question = _decide(
+        state, action_state, user_text, (),
+        ACTION_SUPERVISOR_PROMPT, ActionSupervisorDecision, "Sub-Action",
         model=reasoning_llm,  # thinks first: fewer needless questions, better routing
         method="function_calling",  # a tool call parses reliably; JSON mode can add stray text
     )
 
-    # --- Guard: Never re-route to action worker if already completed ---
-    if goto in action_state["agent_outputs"]:
-        print("  ↳ Guard: action already completed [STATUS: DONE]. Returning to supervisor.")
-        goto = "supervisor"
-
+    # One action worker per turn: once it has reported, go back to the main supervisor.
     if goto == "supervisor" or action_state["agent_outputs"] or routing_history.count(goto) >= 2 or not goto:
-        main_state = get_supervisor_state(state, "main_supervisor")
-        combined_result = "\n\n".join(action_state["agent_outputs"].values()) if action_state["agent_outputs"] else reasoning
-        main_state = record_agent_output(
-            main_state,
-            "sub_actionsupervisor",
-            combined_result,
-        )
-        return Command(
-            goto="supervisor",
-            update={"main_supervisor": main_state, "next": "supervisor"},
-        )
+        return _report_to_main(state, "sub_actionsupervisor", action_state, reasoning)
 
     if goto == "ask_user":
         return _ask_user("action_supervisor", action_state, routing_history, question, reasoning, "sub_actionsupervisor")
 
-    action_state = set_routing_plan(action_state, routing_history + [goto])
     return Command(
         goto=goto,
-        update={"action_supervisor": action_state, "next": goto},
+        update={"action_supervisor": set_routing_plan(action_state, routing_history + [goto]), "next": goto},
     )
