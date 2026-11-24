@@ -92,3 +92,36 @@ def build_run_config(user_id: Any, tracker: "LangSmithTokenTracker") -> Dict[str
         "callbacks": [tracker],
         "configurable": {"thread_id": str(user_id)},
     }
+
+
+class TurnUsage:
+    """Totals for one whole chat turn, across every run it took.
+
+    A turn that pauses to ask the user ("Send it?") is split into several graph
+    runs: one before each question and one after each answer. Each run reports
+    its own tokens; this adds them up so the final answer can show, and save,
+    what the whole turn cost.
+    """
+
+    def __init__(self):
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
+        self.hops = 0
+        self.seconds = 0.0
+
+    def add_run(self, usage: Dict[str, Any], hops: int, seconds: float) -> None:
+        self.prompt_tokens += int(usage.get("prompt_tokens") or 0)
+        self.completion_tokens += int(usage.get("completion_tokens") or 0)
+        self.total_tokens += int(usage.get("total_tokens") or 0)
+        self.hops += max(0, int(hops))
+        self.seconds += max(0.0, seconds)
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "hops": self.hops,
+            "latency_ms": round(self.seconds * 1000),
+        }

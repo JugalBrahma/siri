@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
@@ -81,6 +82,7 @@ async def chat_endpoint(
             status=result["status"],
             interrupt=result.get("interrupt"),
             token_usage=result.get("token_usage"),
+            turn_usage=result.get("turn_usage"),
         )
     except Exception as exc:
         raise HTTPException(
@@ -119,6 +121,8 @@ async def chat_stream_endpoint(
             initial_state = service.builder.prepare_turn(
                 active_user_id, messages, load_history=request_data.messages is None,
             )
+            service.start_turn_usage(active_user_id)
+            started = time.monotonic()
             tracker = LangSmithTokenTracker()
             config = build_run_config(active_user_id, tracker)
 
@@ -149,6 +153,7 @@ async def chat_stream_endpoint(
             if interrupts:
                 interrupt_payload = interrupts[0] if isinstance(interrupts[0], dict) else {"type": "ask_human", "question": str(interrupts[0])}
                 usage_metrics = tracker.get_usage()
+                service.account_run(active_user_id, tracker, hop_count, started, finished=False)
                 yield f"data: {json.dumps({'event': 'interrupt', 'user_id': active_user_id, 'interrupt': interrupt_payload, 'hop': hop_count, 'token_usage': usage_metrics})}\n\n"
                 return
 
@@ -156,12 +161,12 @@ async def chat_stream_endpoint(
             if "messages" in final_state and len(final_state["messages"]) > 0:
                 final_output = final_state["messages"][-1].content
 
-            turn_messages = service.builder.complete_turn(active_user_id, final_state.get("messages", []))
-            if service.learning_service is not None:
-                service.learning_service.submit_completed_turn(turn_messages)
+            hops = max(0, hop_count - 1)
+            turn_usage = service.account_run(active_user_id, tracker, hops, started, finished=True)
+            service.finish_turn(active_user_id, final_state.get("messages", []), turn_usage)
 
             usage_metrics = tracker.get_usage()
-            yield f"data: {json.dumps({'event': 'complete', 'response': final_output, 'hops': max(0, hop_count - 1), 'token_usage': usage_metrics})}\n\n"
+            yield f"data: {json.dumps({'event': 'complete', 'response': final_output, 'hops': hops, 'token_usage': usage_metrics, 'turn_usage': turn_usage})}\n\n"
         except Exception as exc:
             yield f"data: {json.dumps({'event': 'error', 'detail': str(exc)})}\n\n"
 
@@ -191,6 +196,7 @@ async def chat_resume_endpoint(
             status=result["status"],
             interrupt=result.get("interrupt"),
             token_usage=result.get("token_usage"),
+            turn_usage=result.get("turn_usage"),
         )
     except Exception as exc:
         raise HTTPException(
@@ -228,6 +234,7 @@ async def chat_resume_stream_endpoint(
             from langgraph.types import Command
             resume_command = Command(resume=human_response)
 
+            started = time.monotonic()
             tracker = LangSmithTokenTracker()
             config = build_run_config(active_user_id, tracker)
 
@@ -258,6 +265,7 @@ async def chat_resume_stream_endpoint(
             if interrupts:
                 interrupt_payload = interrupts[0] if isinstance(interrupts[0], dict) else {"type": "ask_human", "question": str(interrupts[0])}
                 usage_metrics = tracker.get_usage()
+                service.account_run(active_user_id, tracker, hop_count, started, finished=False)
                 yield f"data: {json.dumps({'event': 'interrupt', 'user_id': active_user_id, 'interrupt': interrupt_payload, 'hop': hop_count, 'token_usage': usage_metrics})}\n\n"
                 return
 
@@ -265,12 +273,12 @@ async def chat_resume_stream_endpoint(
             if "messages" in final_state and len(final_state["messages"]) > 0:
                 final_output = final_state["messages"][-1].content
 
-            turn_messages = service.builder.complete_turn(active_user_id, final_state.get("messages", []))
-            if service.learning_service is not None:
-                service.learning_service.submit_completed_turn(turn_messages)
+            hops = max(0, hop_count - 1)
+            turn_usage = service.account_run(active_user_id, tracker, hops, started, finished=True)
+            service.finish_turn(active_user_id, final_state.get("messages", []), turn_usage)
 
             usage_metrics = tracker.get_usage()
-            yield f"data: {json.dumps({'event': 'complete', 'response': final_output, 'hops': max(0, hop_count - 1), 'token_usage': usage_metrics})}\n\n"
+            yield f"data: {json.dumps({'event': 'complete', 'response': final_output, 'hops': hops, 'token_usage': usage_metrics, 'turn_usage': turn_usage})}\n\n"
         except Exception as exc:
             yield f"data: {json.dumps({'event': 'error', 'detail': str(exc)})}\n\n"
 

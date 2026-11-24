@@ -103,7 +103,15 @@ class ChatResponse(BaseModel):
     )
     token_usage: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Exact token usage and node breakdown from LangSmith/LangChain.",
+        description="Exact token usage and node breakdown from LangSmith/LangChain, for this run.",
+    )
+    turn_usage: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Totals for the whole turn once it finishes, across every pause for a question: "
+            "prompt_tokens, completion_tokens, total_tokens, hops, latency_ms. Also saved with "
+            "the answer in chat history."
+        ),
     )
 
 

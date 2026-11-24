@@ -25,7 +25,8 @@ class FakeBuilder:
     def prepare_turn(self, thread_id, messages, load_history=True):
         return {"messages": messages}
 
-    def complete_turn(self, thread_id, messages):
+    def complete_turn(self, thread_id, messages, meta=None):
+        self.saved_meta = meta
         return list(messages)
 
     def get_state(self, config=None):
@@ -91,6 +92,30 @@ class FastAPITests(unittest.TestCase):
         self.assertEqual(data["status"], "success")
         self.assertEqual(data["user_id"], "test_user")
         self.assertGreaterEqual(data["hop_count"], 1)
+
+    def test_turn_totals_add_up_every_run_of_a_paused_turn(self):
+        from services.token_tracker import LangSmithTokenTracker
+
+        def run(tokens):
+            tracker = LangSmithTokenTracker()
+            tracker.prompt_tokens, tracker.completion_tokens, tracker.total_tokens = tokens - 10, 10, tokens
+            return tracker
+
+        service = self.service
+        service.start_turn_usage("u")
+        service.account_run("u", run(4000), hops=3, started=0, finished=False)   # asked "Send it?"
+        total = service.account_run("u", run(1000), hops=2, started=0, finished=True)
+        self.assertEqual((total["total_tokens"], total["hops"]), (5000, 5))
+        # The next turn starts from zero.
+        service.start_turn_usage("u")
+        self.assertEqual(service.account_run("u", run(7), 1, 0, finished=True)["total_tokens"], 7)
+
+    def test_chat_saves_and_returns_turn_totals(self):
+        response = self.client.post("/chat", json={"message": "hi", "user_id": "test_user"})
+        data = response.json()
+        self.assertEqual(set(data["turn_usage"]),
+                         {"prompt_tokens", "completion_tokens", "total_tokens", "hops", "latency_ms"})
+        self.assertEqual(self.fake_builder.saved_meta, data["turn_usage"])
 
     def test_chat_multi_turn_messages(self):
         response = self.client.post(

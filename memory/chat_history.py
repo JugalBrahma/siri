@@ -1,17 +1,19 @@
 """Local chat history: only what the user saw.
 
 Each finished turn stores two rows — the user's message and Siri's final
-answer. Agent reasoning, routing decisions, and worker outputs are never
+answer. The answer row can also carry the turn's stats (tokens, hops, time) as
+JSON in ``meta``, so a reloaded chat shows the same numbers as a live one. Agent reasoning, routing decisions, and worker outputs are never
 written here; in-progress run data lives in the LangGraph checkpoint tables
 and is deleted once the turn finishes.
 """
 
+import json
 import os
 import sqlite3
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List, Optional
 
 
 def default_db_path() -> Path:
@@ -37,34 +39,49 @@ class ChatHistory:
                     thread_id TEXT NOT NULL,
                     role TEXT NOT NULL,
                     content TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    meta TEXT
                 )"""
             )
+            # Databases made before `meta` existed get the column added once.
+            columns = {row[1] for row in self._conn.execute("PRAGMA table_info(chat_messages)")}
+            if "meta" not in columns:
+                self._conn.execute("ALTER TABLE chat_messages ADD COLUMN meta TEXT")
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id, id)"
             )
 
-    def add_turn(self, thread_id: str, question: str, answer: str) -> None:
-        """Store one finished turn: the user's message and Siri's answer."""
+    def add_turn(self, thread_id: str, question: str, answer: str,
+                 meta: Optional[Dict[str, Any]] = None) -> None:
+        """Store one finished turn: the user's message and Siri's answer (with its stats)."""
         now = datetime.now(timezone.utc).isoformat()
         rows = [
-            (thread_id, "user", question, now),
-            (thread_id, "assistant", answer, now),
+            (thread_id, "user", question, now, None),
+            (thread_id, "assistant", answer, now, json.dumps(meta) if meta else None),
         ]
         with self._lock, self._conn:
             self._conn.executemany(
-                "INSERT INTO chat_messages (thread_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+                "INSERT INTO chat_messages (thread_id, role, content, created_at, meta) VALUES (?, ?, ?, ?, ?)",
                 rows,
             )
 
-    def recent(self, thread_id: str, limit: int = 10) -> List[Dict[str, str]]:
-        """Return the last `limit` messages of a thread, oldest first."""
+    def recent(self, thread_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Return the last `limit` messages of a thread, oldest first.
+
+        Each is {"role", "content"}, plus "meta" for answers saved with stats.
+        """
         with self._lock:
             rows = self._conn.execute(
-                "SELECT role, content FROM chat_messages WHERE thread_id = ? ORDER BY id DESC LIMIT ?",
+                "SELECT role, content, meta FROM chat_messages WHERE thread_id = ? ORDER BY id DESC LIMIT ?",
                 (thread_id, limit),
             ).fetchall()
-        return [{"role": role, "content": content} for role, content in reversed(rows)]
+        messages = []
+        for role, content, meta in reversed(rows):
+            message: Dict[str, Any] = {"role": role, "content": content}
+            if meta:
+                message["meta"] = json.loads(meta)
+            messages.append(message)
+        return messages
 
     def close(self) -> None:
         with self._lock:

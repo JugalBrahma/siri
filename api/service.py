@@ -2,10 +2,12 @@ from datetime import datetime, timezone
 import logging
 import os
 import threading
+import time
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from agents.actionagent import action_agent
+from agents.document_writer import document_writer_agent
+from agents.screen_agents import action_taker_agent, screen_reader_agent
 from agents.guardrail_agent import guardrail_agent
 from agents.output_sanitizer import output_sanitizer_agent
 from agents.research_agent import research_agent
@@ -20,7 +22,7 @@ from memory.chat_history import ChatHistory, default_db_path
 from memory.data_model import FactCategory, SemanticFact
 from memory.observability import MemoryObserver
 from memory.runtime import create_configured_memory_store
-from services.token_tracker import LangSmithTokenTracker, build_run_config
+from services.token_tracker import LangSmithTokenTracker, TurnUsage, build_run_config
 import config.config
 
 LOGGER = logging.getLogger("siri.api.service")
@@ -46,6 +48,33 @@ class SiriAgentService:
         # thread_id -> node being resumed, while a background resume runs.
         self._resuming: Dict[str, str] = {}
         self._resuming_lock = threading.Lock()
+        # thread_id -> totals of a turn that is paused on a question.
+        self._turn_usage: Dict[str, TurnUsage] = {}
+
+    # -- Per-turn token / hop / time totals -----------------------------------
+
+    def start_turn_usage(self, user_id: str) -> None:
+        """A new turn starts: forget the totals of any turn left unfinished."""
+        self._turn_usage.pop(user_id, None)
+
+    def account_run(self, user_id: str, tracker: LangSmithTokenTracker, hops: int,
+                    started: float, finished: bool) -> Dict[str, Any]:
+        """Add one graph run to its turn's totals and return them.
+
+        A run that ends on a question keeps the totals for the next run; a run
+        that finishes the turn hands them back and clears them.
+        """
+        usage = self._turn_usage.setdefault(user_id, TurnUsage())
+        usage.add_run(tracker.get_usage(), hops, time.monotonic() - started)
+        if finished:
+            self._turn_usage.pop(user_id, None)
+        return usage.as_dict()
+
+    def finish_turn(self, user_id: str, messages: list, turn_usage: Dict[str, Any]) -> None:
+        """Save the finished turn (with its totals) and let memory learn from it."""
+        turn_messages = self.builder.complete_turn(user_id, messages, meta=turn_usage)
+        if self.learning_service is not None:
+            self.learning_service.submit_completed_turn(turn_messages)
 
     def initialize(self) -> None:
         """Initialize semantic memory, learning workers, and compile LangGraph."""
@@ -78,7 +107,9 @@ class SiriAgentService:
                 supervisor=superVisorAgent,
                 sub_actionsupervisor=sub_actionSuperVisorAgent,
                 sub_infosupervisor=sub_infoSuperVisorAgent,
-                action=action_agent,
+                document_writer=document_writer_agent,
+                screen_reader=screen_reader_agent,
+                action_taker=action_taker_agent,
                 researcher=research_agent,
                 weather=weather_agent,
                 output_sanitizer=output_sanitizer_agent,
@@ -187,7 +218,9 @@ class SiriAgentService:
 
         active_user_id = user_id or self.default_user_id
         initial_state = self.builder.prepare_turn(active_user_id, messages, load_history=load_history)
+        self.start_turn_usage(active_user_id)
 
+        started = time.monotonic()
         tracker = LangSmithTokenTracker()
         config = build_run_config(active_user_id, tracker)
 
@@ -211,6 +244,7 @@ class SiriAgentService:
 
         if interrupts:
             interrupt_payload = interrupts[0] if isinstance(interrupts[0], dict) else {"type": "ask_human", "question": str(interrupts[0])}
+            self.account_run(active_user_id, tracker, hop_count, started, finished=False)
             return {
                 "response": "",
                 "hop_count": hop_count,
@@ -226,9 +260,8 @@ class SiriAgentService:
 
         # Save the turn to chat history, drop its checkpoint, and learn from
         # this turn's messages only (not the loaded history).
-        turn_messages = self.builder.complete_turn(active_user_id, final_state.get("messages", []))
-        if self.learning_service is not None:
-            self.learning_service.submit_completed_turn(turn_messages)
+        turn_usage = self.account_run(active_user_id, tracker, hop_count, started, finished=True)
+        self.finish_turn(active_user_id, final_state.get("messages", []), turn_usage)
 
         return {
             "response": final_output,
@@ -236,6 +269,7 @@ class SiriAgentService:
             "user_id": active_user_id,
             "status": "success",
             "token_usage": tracker.get_usage(),
+            "turn_usage": turn_usage,
         }
 
     def resume_turn(
@@ -256,6 +290,7 @@ class SiriAgentService:
             raise RuntimeError("Agent workflow is not initialized (builder or graph is None).")
 
         active_user_id = user_id or self.default_user_id
+        started = time.monotonic()
         tracker = LangSmithTokenTracker()
         config = build_run_config(active_user_id, tracker)
 
@@ -280,6 +315,7 @@ class SiriAgentService:
 
         if interrupts:
             interrupt_payload = interrupts[0] if isinstance(interrupts[0], dict) else {"type": "ask_human", "question": str(interrupts[0])}
+            self.account_run(active_user_id, tracker, hop_count, started, finished=False)
             return {
                 "response": "",
                 "hop_count": hop_count,
@@ -294,9 +330,8 @@ class SiriAgentService:
         if "messages" in final_state and len(final_state["messages"]) > 0:
             final_output = final_state["messages"][-1].content
 
-        turn_messages = self.builder.complete_turn(active_user_id, final_state.get("messages", []))
-        if self.learning_service is not None:
-            self.learning_service.submit_completed_turn(turn_messages)
+        turn_usage = self.account_run(active_user_id, tracker, hop_count, started, finished=True)
+        self.finish_turn(active_user_id, final_state.get("messages", []), turn_usage)
 
         return {
             "response": final_output,
@@ -304,6 +339,7 @@ class SiriAgentService:
             "user_id": active_user_id,
             "status": "success",
             "token_usage": tracker.get_usage(),
+            "turn_usage": turn_usage,
         }
 
     def get_chat_history(self, user_id: Optional[str] = None, limit: int = 50) -> Dict[str, Any]:

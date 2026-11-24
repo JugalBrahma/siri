@@ -4,6 +4,7 @@ A "restart" is simulated by building a second GraphBuilder on the same
 SQLite file, so nothing carries over in memory between the two.
 """
 
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -73,7 +74,9 @@ def _nodes(calls: Counter, *, crash_weather_once=False, ask_city=False, supervis
         sub_infosupervisor=sub_infosupervisor,
         output_sanitizer=output_sanitizer,
         sub_actionsupervisor=unused,
-        action=unused,
+        document_writer=unused,
+        screen_reader=unused,
+        action_taker=unused,
     )
 
 
@@ -262,6 +265,26 @@ class ChatHistoryTests(unittest.TestCase):
             [m["content"] for m in self.history.recent("t1", limit=4)],
             ["q1", "a1", "q2", "a2"],
         )
+
+    def test_answer_keeps_its_stats(self):
+        stats = {"total_tokens": 75000, "hops": 22, "latency_ms": 140000}
+        self.history.add_turn("t1", "send hi", "Sent.", stats)
+        question, answer = self.history.recent("t1")
+        self.assertNotIn("meta", question)
+        self.assertEqual(answer["meta"], stats)
+
+    def test_old_database_gets_the_stats_column(self):
+        self.history.close()
+        path = Path(self._tmp.name) / "old.db"
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE chat_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, thread_id TEXT NOT NULL, "
+                     "role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL)")
+        conn.execute("INSERT INTO chat_messages (thread_id, role, content, created_at) VALUES ('t1', 'user', 'old q', 'x')")
+        conn.commit()
+        conn.close()
+        self.history = ChatHistory(path)
+        self.history.add_turn("t1", "new q", "new a", {"total_tokens": 5})
+        self.assertEqual([m.get("meta") for m in self.history.recent("t1")], [None, None, {"total_tokens": 5}])
 
     def test_threads_are_separate_and_clearable(self):
         self.history.add_turn("t1", "q", "a")
