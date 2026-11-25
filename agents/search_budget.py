@@ -1,18 +1,8 @@
-"""Adaptive cap on how many web searches the research agent may run per task.
+"""Caps web searches per research task: 2, or 3 if the first search failed.
 
-  first search returned results -> at most `normal_limit` searches (default 2)
-  first search failed           -> at most `retry_limit` searches  (default 3)
-
-"Failed" means the search tool returned an error or no results, so one extra
-attempt is allowed to recover. The limit is worked out from the conversation
-history on every model turn, so nothing is stored on the middleware instance
-and parallel runs cannot interfere with each other.
-
-Searches over the limit are refused before they run: the agent receives an
-error ToolMessage telling it to answer with what it already has (same
-mechanism as LangChain's ToolCallLimitMiddleware with exit_behavior="continue").
+The limit is worked out from the message history each turn, so the middleware
+keeps no state. Searches over the limit are refused with an error message.
 """
-from __future__ import annotations
 
 from typing import Any
 

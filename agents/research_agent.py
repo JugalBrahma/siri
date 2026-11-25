@@ -1,9 +1,12 @@
-from langgraph.types import Command
 from typing import Literal
+
+from langgraph.types import Command
+
 from prompts import load_prompt
 from state.message_state import State
-from tools.searchtools import search_tool
 from tools.human_tool import ask_human
+from tools.searchtools import search_tool
+
 from .search_budget import AdaptiveSearchLimit
 from .worker import run_worker
 
@@ -27,7 +30,7 @@ RESEARCH_SYSTEM_PROMPT = load_prompt(
 )
 
 
-def research_agent(state:State)-> Command[Literal["sub_infosupervisor"]]:
+def research_agent(state: State) -> Command[Literal["sub_infosupervisor"]]:
     print("--- RESEARCH AGENT ---")
     return run_worker(
         state,

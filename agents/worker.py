@@ -42,7 +42,6 @@ def run_worker(
     system_prompt = base_prompt + semantic_memory_prompt(worker_state["semantic_memory"])
     agent_exec = create_agent(llm, tools, system_prompt=system_prompt, middleware=middleware or [])
 
-    # Use only the latest user task, not the full conversation history
     result = agent_exec.invoke(
         {"messages": [{"role": "user", "content": worker_state["task"] + task_suffix}]}
     )
