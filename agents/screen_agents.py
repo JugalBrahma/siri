@@ -13,10 +13,10 @@ that app to the front first and screenshots only its window, so it works on
 any display and keys never land in the window the user answered from.
 """
 
-from typing import Literal
+from typing import Any, Literal
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import ModelCallLimitMiddleware, ToolCallLimitMiddleware
+from langchain.agents.middleware import AgentMiddleware, ModelCallLimitMiddleware, ToolCallLimitMiddleware
 from langchain.agents.structured_output import ToolStrategy
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.errors import GraphInterrupt
@@ -65,12 +65,11 @@ DONT_ASK_AGAIN = ("don't ask again", "dont ask again", "do not ask again",
                   "no need to ask", "stop asking")
 
 
-def _is_clear_yes(answer: str) -> bool:
-    text = answer.lower().replace("’", "'")
-    for phrase in DONT_ASK_AGAIN:
-        text = text.replace(phrase, " ")
-    words = "".join(ch if ch.isalnum() or ch in " '" else " " for ch in text).split()
-    return bool(words) and words[0] in YES_WORDS and all(w in YES_FILLER for w in words[1:])
+def _screen_of(state: State) -> ScreenTask:
+    """The current screen task, with any missing fields filled in."""
+    screen = new_screen_task()
+    screen.update(state.get("screen") or {})
+    return screen
 
 
 def _answer_to(question: str, state: State) -> str:
@@ -81,6 +80,14 @@ def _answer_to(question: str, state: State) -> str:
     if start < 0:
         return ""
     return text[start + len(marker):].rstrip().removesuffix(")")
+
+
+def _is_clear_yes(answer: str) -> bool:
+    text = answer.lower().replace("’", "'")
+    for phrase in DONT_ASK_AGAIN:
+        text = text.replace(phrase, " ")
+    words = "".join(ch if ch.isalnum() or ch in " '" else " " for ch in text).split()
+    return bool(words) and words[0] in YES_WORDS and all(w in YES_FILLER for w in words[1:])
 
 
 def _progress(screen: ScreenTask, answer: str) -> str:
@@ -142,7 +149,7 @@ def _finish(state: State, summary: str) -> Command:
 
 def screen_reader_agent(state: State) -> Command[Literal["action_taker", "ask_user", "sub_actionsupervisor"]]:
     print("--- SCREEN READER ---")
-    screen: ScreenTask = {**new_screen_task(), **(state.get("screen") or {})}
+    screen: ScreenTask = _screen_of(state)
 
     # Coming back from a question: a clear yes approves the rest of the task;
     # anything else (an edit, "no") withdraws approval until asked again.
@@ -152,6 +159,13 @@ def screen_reader_agent(state: State) -> Command[Literal["action_taker", "ask_us
         screen = {**screen, "confirm_question": "", "approved": _is_clear_yes(answer)}
 
     worker_state = build_worker_state(state, "action_supervisor")
+    # Typed explicitly: the limit middlewares have different state types, so an
+    # inline list is inferred as a union that create_agent's overloads reject.
+    middleware: list[AgentMiddleware[Any, Any, Any]] = [
+        ModelCallLimitMiddleware(run_limit=READER_MODEL_CALLS),
+        ToolCallLimitMiddleware(tool_name="screenshot", run_limit=READER_SCREENSHOTS),
+        ToolCallLimitMiddleware(tool_name="open_app", run_limit=READER_OPEN_APPS),
+    ]
     agent = create_agent(
         reasoning_llm,  # thinks before deciding: asks less, recovers better
         [open_app, list_apps, screenshot],
@@ -159,11 +173,7 @@ def screen_reader_agent(state: State) -> Command[Literal["action_taker", "ask_us
         # The decision is submitted as a tool call: a malformed one is sent back
         # to the model to fix, instead of failing the turn.
         response_format=ToolStrategy(ScreenDecision),
-        middleware=[
-            ModelCallLimitMiddleware(run_limit=READER_MODEL_CALLS),
-            ToolCallLimitMiddleware(tool_name="screenshot", run_limit=READER_SCREENSHOTS),
-            ToolCallLimitMiddleware(tool_name="open_app", run_limit=READER_OPEN_APPS),
-        ],
+        middleware=middleware,
     )
     task = worker_state["task"] + gathered_info_suffix(state) + _progress(screen, answer)
     try:
@@ -207,18 +217,19 @@ def screen_reader_agent(state: State) -> Command[Literal["action_taker", "ask_us
 
 def action_taker_agent(state: State) -> Command[Literal["screen_reader"]]:
     print("--- ACTION TAKER ---")
-    screen: ScreenTask = {**new_screen_task(), **(state.get("screen") or {})}
+    screen: ScreenTask = _screen_of(state)
     if not screen["instruction"]:
         return Command(goto="screen_reader", update={"screen": {**screen, "report": "No instruction given."}})
 
+    middleware: list[AgentMiddleware[Any, Any, Any]] = [
+        ModelCallLimitMiddleware(run_limit=TAKER_MODEL_CALLS),
+        ToolCallLimitMiddleware(tool_name="click_on", run_limit=TAKER_CLICK_ONS),
+    ]
     agent = create_agent(
         llm,
         [type_text, press_keys, click_on],
         system_prompt=ACTION_TAKER_PROMPT,
-        middleware=[
-            ModelCallLimitMiddleware(run_limit=TAKER_MODEL_CALLS),
-            ToolCallLimitMiddleware(tool_name="click_on", run_limit=TAKER_CLICK_ONS),
-        ],
+        middleware=middleware,
     )
     with screen_target(screen["app"], screen["toggled"]) as target:
         result = agent.invoke({"messages": [{"role": "user", "content": screen["instruction"]}]})
