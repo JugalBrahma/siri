@@ -8,6 +8,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import agents.fast_path as fast_path
 import agents.supervisor_agent as sup
 from agents.supervisor_agent import ACTION_SUPERVISOR_PROMPT, INFO_SUPERVISOR_PROMPT, MAIN_SUPERVISOR_PROMPT
 from state.message_state import (
@@ -37,18 +38,18 @@ def _turn(text):
 
 class TestFastPaths(unittest.TestCase):
     def test_main_fast_path(self):
-        self.assertEqual(sup._pick_by_keywords("what is the weather", *sup._MAIN_FAST_PATH), "sub_infosupervisor")
-        self.assertEqual(sup._pick_by_keywords("create a file", *sup._MAIN_FAST_PATH), "sub_actionsupervisor")
-        self.assertIsNone(sup._pick_by_keywords("research cats and write a document", *sup._MAIN_FAST_PATH))
-        self.assertIsNone(sup._pick_by_keywords("hmm", *sup._MAIN_FAST_PATH))
-        self.assertIsNone(sup._pick_by_keywords("", *sup._MAIN_FAST_PATH))
+        self.assertEqual(fast_path.pick_by_keywords("what is the weather", *fast_path.MAIN_FAST_PATH), "sub_infosupervisor")
+        self.assertEqual(fast_path.pick_by_keywords("create a file", *fast_path.MAIN_FAST_PATH), "sub_actionsupervisor")
+        self.assertIsNone(fast_path.pick_by_keywords("research cats and write a document", *fast_path.MAIN_FAST_PATH))
+        self.assertIsNone(fast_path.pick_by_keywords("hmm", *fast_path.MAIN_FAST_PATH))
+        self.assertIsNone(fast_path.pick_by_keywords("", *fast_path.MAIN_FAST_PATH))
 
     def test_info_fast_path(self):
-        self.assertEqual(sup._pick_by_keywords("forecast for Tokyo", *sup._INFO_FAST_PATH), "weather")
-        self.assertEqual(sup._pick_by_keywords("search the news", *sup._INFO_FAST_PATH), "researcher")
-        self.assertIsNone(sup._pick_by_keywords("search the weather forecast", *sup._INFO_FAST_PATH))
-        self.assertIsNone(sup._pick_by_keywords("Mumbai today", *sup._INFO_FAST_PATH))
-        self.assertIsNone(sup._pick_by_keywords("", *sup._INFO_FAST_PATH))
+        self.assertEqual(fast_path.pick_by_keywords("forecast for Tokyo", *fast_path.INFO_FAST_PATH), "weather")
+        self.assertEqual(fast_path.pick_by_keywords("search the news", *fast_path.INFO_FAST_PATH), "researcher")
+        self.assertIsNone(fast_path.pick_by_keywords("search the weather forecast", *fast_path.INFO_FAST_PATH))
+        self.assertIsNone(fast_path.pick_by_keywords("Mumbai today", *fast_path.INFO_FAST_PATH))
+        self.assertIsNone(fast_path.pick_by_keywords("", *fast_path.INFO_FAST_PATH))
 
 
 class TestMainSupervisor(unittest.TestCase):
