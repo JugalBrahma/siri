@@ -22,10 +22,12 @@ def _install_langgraph_stub() -> None:
     except ImportError:
         pass
 
-    langgraph_pkg = types.ModuleType("langgraph")
-    graph = types.ModuleType("langgraph.graph")
-    checkpoint = types.ModuleType("langgraph.checkpoint")
-    checkpoint_memory = types.ModuleType("langgraph.checkpoint.memory")
+    def module(name: str, **attrs) -> types.ModuleType:
+        mod = types.ModuleType(name)
+        for key, value in attrs.items():
+            setattr(mod, key, value)
+        sys.modules[name] = mod
+        return mod
 
     class FakeStateGraph:
         def __init__(self, *_args, **_kwargs):
@@ -34,17 +36,10 @@ def _install_langgraph_stub() -> None:
     class FakeMemorySaver:
         pass
 
-    graph.MessagesState = dict
-    graph.StateGraph = FakeStateGraph
-    graph.END = "END"
-    checkpoint_memory.MemorySaver = FakeMemorySaver
-    langgraph_pkg.graph = graph
-    langgraph_pkg.checkpoint = checkpoint
-    checkpoint.memory = checkpoint_memory
-    sys.modules["langgraph"] = langgraph_pkg
-    sys.modules["langgraph.graph"] = graph
-    sys.modules["langgraph.checkpoint"] = checkpoint
-    sys.modules["langgraph.checkpoint.memory"] = checkpoint_memory
+    checkpoint_memory = module("langgraph.checkpoint.memory", MemorySaver=FakeMemorySaver)
+    checkpoint = module("langgraph.checkpoint", memory=checkpoint_memory)
+    graph = module("langgraph.graph", MessagesState=dict, StateGraph=FakeStateGraph, END="END")
+    module("langgraph", graph=graph, checkpoint=checkpoint)
 
 
 _install_langgraph_stub()
@@ -87,6 +82,36 @@ class FakeMemoryObserver:
 
 
 class SemanticMemoryStateTests(unittest.TestCase):
+    def test_agent_output_overwrites_previous_result(self):
+        scope = new_supervisor_state()
+        scope = record_agent_output(scope, "researcher", "temporary failed answer")
+        scope = record_agent_output(scope, "researcher", "latest successful answer")
+
+        self.assertEqual(scope["agent_outputs"], {"researcher": "latest successful answer"})
+
+    def test_supervisor_scopes_are_isolated(self):
+        turn = create_turn_state([{"role": "user", "content": "Search the weather"}], "- Metric units")
+        main = get_supervisor_state(turn, "main_supervisor")
+        info = new_supervisor_state(main["semantic_memory"])
+        info = record_agent_output(info, "weather", "30°C and rain")
+
+        self.assertEqual(main["agent_outputs"], {})
+        self.assertEqual(info["agent_outputs"], {"weather": "30°C and rain"})
+        self.assertEqual(main["semantic_memory"], info["semantic_memory"])
+
+    def test_worker_scratchpad_never_enters_graph_state(self):
+        messages = [{"role": "user", "content": "Find Mumbai weather"}]
+        turn = create_turn_state(messages, "- The user prefers Celsius [high confidence]")
+        turn["info_supervisor"] = new_supervisor_state(
+            turn["main_supervisor"]["semantic_memory"],
+        )
+        worker = build_worker_state(turn, "info_supervisor")
+        worker["task"] = "changed by the worker"
+
+        self.assertEqual(set(worker), {"task", "semantic_memory"})
+        self.assertEqual(turn["messages"], [{"role": "user", "content": "Find Mumbai weather"}])
+        self.assertEqual(worker["semantic_memory"], turn["info_supervisor"]["semantic_memory"])
+
     def test_memory_is_fetched_once_per_turn(self):
         store = FakeMemoryStore("- The user prefers concise answers [high confidence]")
         observer = FakeMemoryObserver()
@@ -113,38 +138,6 @@ class SemanticMemoryStateTests(unittest.TestCase):
             "- The user prefers concise answers [high confidence]",
         )
         self.assertEqual(len(observer.successes), 1)
-
-    def test_supervisor_scopes_are_isolated(self):
-        turn = create_turn_state([{"role": "user", "content": "Search the weather"}], "- Metric units")
-        main = get_supervisor_state(turn, "main_supervisor")
-        info = new_supervisor_state(main["semantic_memory"])
-        info = record_agent_output(info, "weather", "30°C and rain")
-
-        self.assertEqual(main["agent_outputs"], {})
-        self.assertEqual(info["agent_outputs"], {"weather": "30°C and rain"})
-        self.assertEqual(main["semantic_memory"], info["semantic_memory"])
-
-    def test_agent_output_overwrites_previous_result(self):
-        scope = new_supervisor_state()
-        scope = record_agent_output(scope, "researcher", "temporary failed answer")
-        scope = record_agent_output(scope, "researcher", "latest successful answer")
-
-        self.assertEqual(scope["agent_outputs"], {"researcher": "latest successful answer"})
-
-    def test_worker_scratchpad_never_enters_graph_state(self):
-        turn = create_turn_state(
-            [{"role": "user", "content": "Find Mumbai weather"}],
-            "- The user prefers Celsius [high confidence]",
-        )
-        turn["info_supervisor"] = new_supervisor_state(
-            turn["main_supervisor"]["semantic_memory"],
-        )
-        worker = build_worker_state(turn, "info_supervisor")
-        worker["task"] = "changed by the worker"
-
-        self.assertEqual(set(worker), {"task", "semantic_memory"})
-        self.assertEqual(turn["messages"][0]["content"], "Find Mumbai weather")
-        self.assertEqual(worker["semantic_memory"], turn["info_supervisor"]["semantic_memory"])
 
 
 if __name__ == "__main__":

@@ -10,19 +10,26 @@ import threading
 import unittest
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 from langchain_core.messages import AIMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command, interrupt
 
 from graph_builder.graph import GraphBuilder, open_sqlite_checkpointer, pending_interrupt
 from memory.chat_history import ChatHistory
 
 
-def _thread(thread_id):
+def _history(builder: GraphBuilder) -> ChatHistory:
+    assert builder.chat_history is not None
+    return builder.chat_history
+
+
+def _thread(thread_id: str) -> RunnableConfig:
     return {"configurable": {"thread_id": thread_id}}
 
 
-def _nodes(calls: Counter, *, crash_weather_once=False, ask_city=False, supervisor_asks=False, weather_gate=None):
+def _nodes(calls: Counter, *, crash_weather_once=False, ask_city=False, supervisor_asks=False, weather_gate=None) -> dict[str, Any]:
     """Stand-in agents that follow the real graph's edges and count their runs."""
 
     def guardrail(state):
@@ -92,7 +99,7 @@ class _SqliteHarness(unittest.TestCase):
     def tearDown(self):
         for builder in self._builders:
             builder.checkpointer.conn.close()
-            builder.chat_history.close()
+            _history(builder).close()
         self._tmp.cleanup()
 
     def _builder(self, **node_options):
@@ -130,7 +137,7 @@ class PersistenceTests(_SqliteHarness):
         self.assertEqual(self.calls["weather"], 2)
         # The clean result is in history and the checkpoint is gone.
         self.assertEqual(
-            restarted.chat_history.recent("siri_user"),
+            _history(restarted).recent("siri_user"),
             [
                 {"role": "user", "content": "Weather in Tokyo?"},
                 {"role": "assistant", "content": "Answer: 18°C and sunny"},
@@ -182,27 +189,27 @@ class PersistenceTests(_SqliteHarness):
         self.assertEqual(turn[-1].content, "Answer: 18°C and sunny")
         self.assertEqual(self.calls["supervisor"], 2)
         self.assertEqual(self.calls["guardrail"], 1)
-        self.assertEqual(restarted.chat_history.recent("siri_user")[0]["content"], turn[0].content)
+        self.assertEqual(_history(restarted).recent("siri_user")[0]["content"], turn[0].content)
 
     def test_next_turn_sees_last_two_turns_and_learns_only_from_itself(self):
         builder = self._builder()
-        builder.chat_history.add_turn("siri_user", "Hi", "Hello!")
-        builder.chat_history.add_turn("siri_user", "Weather in Paris?", "12°C")
-        builder.chat_history.add_turn("siri_user", "Weather in Tokyo?", "18°C")
+        _history(builder).add_turn("siri_user", "Hi", "Hello!")
+        _history(builder).add_turn("siri_user", "Weather in Paris?", "12°C")
+        _history(builder).add_turn("siri_user", "Weather in Tokyo?", "18°C")
 
         state = builder.prepare_turn("siri_user", [{"role": "user", "content": "And tomorrow?"}])
         self.assertEqual(
             state["recent_history"],
             "User: Weather in Paris?\nSiri: 12°C\nUser: Weather in Tokyo?\nSiri: 18°C",
         )
-        self.assertEqual([m["content"] for m in state["messages"]], ["And tomorrow?"])
+        self.assertEqual(state["messages"], [{"role": "user", "content": "And tomorrow?"}])
 
         for _ in builder.stream(state, stream_mode="updates", config=_thread("siri_user")):
             pass
         turn = builder.complete_turn("siri_user", builder.get_state(_thread("siri_user")).values["messages"])
 
         self.assertEqual(turn[0].content, "And tomorrow?")
-        self.assertEqual(len(builder.chat_history.recent("siri_user", limit=50)), 8)
+        self.assertEqual(len(_history(builder).recent("siri_user", limit=50)), 8)
 
     def test_new_message_replaces_an_abandoned_paused_turn(self):
         builder = self._builder(ask_city=True)
@@ -245,7 +252,7 @@ class BackgroundResumeTests(_SqliteHarness):
             threading.Event().wait(0.05)
 
         self.assertEqual(service.get_chat_status("siri_user")["status"], "idle")
-        self.assertEqual(restarted.chat_history.recent("siri_user")[-1]["content"], "Answer: 18°C and sunny")
+        self.assertEqual(_history(restarted).recent("siri_user")[-1]["content"], "Answer: 18°C and sunny")
         self.assertEqual(len(learned), 1)
 
 
